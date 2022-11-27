@@ -48,7 +48,15 @@
 #endif
 
 #ifdef TLS_AMALGAMATION
+#ifdef I
+#define TLS_I_MACRO I
+#undef I
+#endif
 #include "libtomcrypt.c"
+#ifdef TLS_I_MACRO
+#define I TLS_I_MACRO
+#undef TLS_I_MACRO
+#endif
 #else
 #include <tomcrypt.h>
 #endif
