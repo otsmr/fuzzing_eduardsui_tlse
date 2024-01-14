@@ -10053,6 +10053,44 @@ int tls_srtp_key(struct TLSContext *context, unsigned char *buffer, unsigned int
     return 0;
 }
 
+int tls_cert_fingerprint(const char *pem_data, int pem_size, char *buffer, unsigned int buf_len) {
+    unsigned int len = 0;
+    if ((!buffer) || (!buf_len))
+        return TLS_GENERIC_ERROR;
+
+    unsigned char *data = tls_pem_decode(pem_data, pem_size, 0, &len);
+    if (!data)
+        return TLS_GENERIC_ERROR;
+
+    unsigned char hash[32];
+    
+    hash_state state;
+
+    sha256_init(&state);
+    sha256_process(&state, data, len);
+    sha256_done(&state, hash);
+
+    TLS_FREE(data);
+
+    int i;
+    buffer[0] = 0;
+    for (i = 0; i < 32; i++) {
+        if (buf_len <= 1)
+            break;
+        if (i) {
+            snprintf(buffer, buf_len, ":");
+            buffer ++;
+            buf_len --;
+        }
+        if (buf_len <= 2)
+            break;
+        snprintf(buffer, buf_len, "%02X", (unsigned int)hash[i]);
+        buffer += 2;
+        buf_len -= 2;
+    }
+    return 0;
+}
+
 int tls_load_root_certificates(struct TLSContext *context, const unsigned char *pem_buffer, int pem_size) {
     if (!context)
         return TLS_GENERIC_ERROR;
