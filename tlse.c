@@ -9558,10 +9558,8 @@ int tls_consume_stream(struct TLSContext *context, const unsigned char *buf, int
                 unsigned int fragment_offset = buffer[6] * 0x10000 + buffer[7] * 0x100 + buffer[8];
                 unsigned int fragment_length = buffer[9] * 0x10000 + buffer[10] * 0x100 + buffer[11];
 
-                if ((data_length > DTLS_MAX_FRAGMENT_SIZE) || (fragment_offset + fragment_length > data_length)) {
-                    exit(0);
+                if ((data_length > DTLS_MAX_FRAGMENT_SIZE) || (fragment_offset + fragment_length > data_length))
                     return TLS_BROKEN_PACKET;
-                }
 
                 if (data_length != fragment_length) {
                     // fragmented!
