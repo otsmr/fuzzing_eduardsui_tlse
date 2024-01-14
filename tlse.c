@@ -5812,7 +5812,7 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
                 // use_srtp
                 tls_packet_uint8(packet, 0x0E);
                 if (context->is_server) {
-                    tls_packet_uint16(packet, 3);
+                    tls_packet_uint16(packet, 2);
                     tls_packet_uint16(packet, SRTP_AES128_CM_HMAC_SHA1_32);
                     tls_packet_uint8(packet, 0);
                     extension_len += 5;
@@ -6696,6 +6696,10 @@ int tls_parse_hello(struct TLSContext *context, const unsigned char *buf, int bu
             if (extension_type == 0x0B) {
                 // supported point formats
                 DEBUG_DUMP_HEX_LABEL("SUPPORTED POINT FORMATS", &buf[res], extension_len);
+            } else 
+            if ((extension_type == 0x0E) && (context->dtls)) {
+                // use_srtp
+                DEBUG_DUMP_HEX_LABEL("USE SRTP", &buf[res], extension_len);
             }
 #ifdef WITH_TLS_13
             else
@@ -9548,7 +9552,7 @@ int tls_consume_stream(struct TLSContext *context, const unsigned char *buf, int
         }
         int parse_message = 1;
         int consumed = 0;
-        if (context->dtls) {
+        if ((context->dtls) && (!context->cipher_spec_set)) {
             // check fragmented!
             unsigned char *buffer = &context->message_buffer[index];
             if ((buffer[0] == TLS_HANDSHAKE) && (length > 13)) {
@@ -9558,8 +9562,10 @@ int tls_consume_stream(struct TLSContext *context, const unsigned char *buf, int
                 unsigned int fragment_offset = buffer[6] * 0x10000 + buffer[7] * 0x100 + buffer[8];
                 unsigned int fragment_length = buffer[9] * 0x10000 + buffer[10] * 0x100 + buffer[11];
 
-                if ((data_length > DTLS_MAX_FRAGMENT_SIZE) || (fragment_offset + fragment_length > data_length))
+                if ((data_length > DTLS_MAX_FRAGMENT_SIZE) || (fragment_offset + fragment_length > data_length)) {
+                    DEBUG_PRINT("INVALID PACKET SIZE: %i, FRAGMENT OFFSET: %i, FRAGMENT LENGTH: %i\n");
                     return TLS_BROKEN_PACKET;
+                }
 
                 if (data_length != fragment_length) {
                     // fragmented!
@@ -10033,6 +10039,17 @@ int tls_srtp_set(struct TLSContext *context) {
     if ((!context) || (!context->dtls))
         return TLS_GENERIC_ERROR;
     context->dtls = 4;
+    return 0;
+}
+
+int tls_srtp_key(struct TLSContext *context, unsigned char *buffer, unsigned int buf_len, unsigned char *salt, unsigned int salt_len) {
+    if ((!buffer) || (!buf_len) || (!context->master_key) || (!context->master_key_len))
+        return TLS_GENERIC_ERROR;
+
+    const char *key_label = "EXTRACTOR-dtls_srtp";
+    int key_label_len = strlen(key_label);
+
+    _private_tls_prf_helper(find_hash("sha1"), 20, buffer, buf_len, context->master_key, context->master_key_len, (unsigned char *)key_label, key_label_len, salt, salt_len, NULL, 0);
     return 0;
 }
 
