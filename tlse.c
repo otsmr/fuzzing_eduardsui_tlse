@@ -1,5 +1,5 @@
 /********************************************************************************
- Copyright (c) 2016-2023, Eduard Suica
+ Copyright (c) 2016-2024, Eduard Suica
  All rights reserved.
  
  Redistribution and use in source and binary forms, with or without modification,
@@ -169,10 +169,11 @@
 #define TLS_MAX_TAG_LEN             16
 #define TLS_MIN_FINISHED_OPAQUE_LEN 12
 
-#define TLS_BLOB_INCREMENT        0xFFF
-#define TLS_ASN1_MAXLEVEL         0xFF
+#define TLS_BLOB_INCREMENT          0xFFF
+#define TLS_ASN1_MAXLEVEL           0xFF
 
-#define DTLS_COOKIE_SIZE          32
+#define DTLS_COOKIE_SIZE            32
+#define DTLS_MAX_FRAGMENT_SIZE      0x40000
 
 #define TLS_MAX_SHA_SIZE 48
 // 16(md5) + 20(sha1)
@@ -191,9 +192,10 @@
 #define TLS_V13_MAX_IV_SIZE       12
 
 #define VERSION_SUPPORTED(version, err)  if ((version != TLS_V13) && (version != TLS_V12) && (version != TLS_V11) && (version != TLS_V10) && (version != DTLS_V13) && (version != DTLS_V12) && (version != DTLS_V10)) { if ((version == SSL_V30) && (context->connection_status == 0)) { version = TLS_V12; } else { DEBUG_PRINT("UNSUPPORTED TLS VERSION %x\n", (int)version); return err;} }
-#define CHECK_SIZE(size, buf_size, err)  if (((int)(size) > (int)(buf_size)) || ((int)(buf_size) < 0)) return err;
+#define CHECK_SIZE(size, buf_size, err)  if (((int)(size) > (int)(buf_size)) || ((int)(buf_size) < 0)) { DEBUG_PRINT("[EXPECTED AT LEAST %i IN BUFFER OF SIZE %i]\n", (int)(size), (int)(buf_size)); return err; }
 #define TLS_IMPORT_CHECK_SIZE(buf_pos, size, buf_size) if (((int)size > (int)buf_size - buf_pos) || ((int)buf_pos > (int)buf_size)) { DEBUG_PRINT("IMPORT ELEMENT SIZE ERROR\n"); tls_destroy_context(context); return NULL; }
 #define CHECK_HANDSHAKE_STATE(context, n, limit)  { if (context->hs_messages[n] >= limit) { DEBUG_PRINT("* UNEXPECTED MESSAGE (%i)\n", (int)n); payload_res = TLS_UNEXPECTED_MESSAGE; break; } context->hs_messages[n]++; }
+#define TLS_24_BIT(buf, index, val) { unsigned int u_val = (unsigned int)val; buf[index] =  u_val / 0x10000; u_val %= 0x10000; buf[index + 1] =  u_val / 0x100; u_val %= 0x100; buf[index + 2] = u_val; }
 
 #if CRYPT > 0x0118
     #define TLS_TOMCRYPT_PRIVATE_DP(key)                ((key).dp)
@@ -1188,6 +1190,12 @@ void init_curves() {
 }
 #endif
 
+struct DTLSFragment {
+    char *buffer;
+    int len;
+    int written;
+};
+
 struct TLSContext {
     unsigned char remote_random[TLS_CLIENT_RANDOM_SIZE];
     unsigned char local_random[TLS_SERVER_RANDOM_SIZE];
@@ -1273,6 +1281,8 @@ struct TLSContext {
 #ifdef TLS_12_FALSE_START
     unsigned char false_start;
 #endif
+
+    struct DTLSFragment *fragment;
 };
 
 struct TLSPacket {
@@ -4666,6 +4676,10 @@ void tls_destroy_context(struct TLSContext *context) {
 #ifdef TLS_CURVE25519
     TLS_FREE(context->client_secret);
 #endif
+    if (context->fragment) {
+        TLS_FREE(context->fragment->buffer);
+        TLS_FREE(context->fragment);
+    }
     TLS_FREE(context);
 }
 
@@ -5793,6 +5807,31 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
             tls_packet_uint8(packet, 1);
             // no compression
             tls_packet_uint8(packet, 0);
+
+            if (context->dtls == 4) {
+                // use_srtp
+                tls_packet_uint8(packet, 0x0E);
+                if (context->is_server) {
+                    tls_packet_uint16(packet, 3);
+                    tls_packet_uint16(packet, SRTP_AES128_CM_HMAC_SHA1_32);
+                    tls_packet_uint8(packet, 0);
+                    extension_len += 5;
+                } else {
+                    tls_packet_uint16(packet, 12);
+
+                    tls_packet_uint16(packet, SRTP_AES128_CM_HMAC_SHA1_80);
+                    tls_packet_uint8(packet, 0);
+                    tls_packet_uint16(packet, SRTP_AES128_CM_HMAC_SHA1_32);
+                    tls_packet_uint8(packet, 0);
+                    tls_packet_uint16(packet, SRTP_NULL_HMAC_SHA1_80);
+                    tls_packet_uint8(packet, 0);
+                    tls_packet_uint16(packet, SRTP_NULL_HMAC_SHA1_32);
+                    tls_packet_uint8(packet, 0);
+
+                    extension_len += 14;
+                }
+            }
+
             if ((context->version == TLS_V12) || (context->version == DTLS_V12) || (context->version == TLS_V13) || (context->version == DTLS_V13)) {
                 int sni_len = 0;
                 if (context->sni)
@@ -6096,6 +6135,8 @@ int _private_dtls_build_cookie(struct TLSContext *context) {
 
         unsigned long out_size = DTLS_COOKIE_SIZE;
         hmac_done(&hmac, context->dtls_cookie, &out_size);
+
+        context->dtls_cookie_len = out_size;
 #endif
     }
     return 1;
@@ -6121,7 +6162,7 @@ struct TLSPacket *tls_build_verify_request(struct TLSContext *context) {
         tls_packet_uint16(packet, 0);
         // 24-bit fragment_offset
         tls_packet_uint24(packet, 0);
-        // 24-bit fragment_offset
+        // 24-bit fragment_length
         tls_packet_uint24(packet, context->dtls_cookie_len + 3);
         // server_version
         tls_packet_uint16(packet, context->version);
@@ -6132,7 +6173,7 @@ struct TLSPacket *tls_build_verify_request(struct TLSContext *context) {
     return packet;
 }
 
-int _private_dtls_check_packet(const unsigned char *buf, int buf_len) {
+int _private_dtls_check_packet(struct TLSContext *context, const unsigned char *buf, int buf_len) {
     CHECK_SIZE(11, buf_len, TLS_NEED_MORE_DATA)
 
     unsigned int bytes_to_follow = buf[0] * 0x10000 + buf[1] * 0x100 + buf[2];
@@ -6141,7 +6182,9 @@ int _private_dtls_check_packet(const unsigned char *buf, int buf_len) {
     unsigned int fragment_length = buf[8] * 0x10000 + buf[9] * 0x100 + buf[10];
 
     if ((fragment_offset) || (fragment_length != bytes_to_follow)) {
-        DEBUG_PRINT("FRAGMENTED PACKETS NOT SUPPORTED\n");
+        if ((context->fragment) && (context->fragment->written == bytes_to_follow))
+            return bytes_to_follow;
+
         return TLS_FEATURE_NOT_SUPPORTED;
     }
     return bytes_to_follow;
@@ -6162,7 +6205,7 @@ int tls_parse_verify_request(struct TLSContext *context, const unsigned char *bu
         return TLS_UNEXPECTED_MESSAGE;
     }
     int res = 11;
-    int bytes_to_follow = _private_dtls_check_packet(buf, buf_len);
+    int bytes_to_follow = _private_dtls_check_packet(context, buf, buf_len);
     if (bytes_to_follow < 0)
         return bytes_to_follow;
 
@@ -6419,7 +6462,7 @@ int tls_parse_hello(struct TLSContext *context, const unsigned char *buf, int bu
     unsigned int bytes_to_follow = buf[0] * 0x10000 + buf[1] * 0x100 + buf[2];
     res += 3;
     if (context->dtls) {
-        int dtls_check = _private_dtls_check_packet(buf, buf_len);
+        int dtls_check = _private_dtls_check_packet(context, buf, buf_len);
         if (dtls_check < 0)
             return dtls_check;
         // 16 bit message seq + 24 bit fragment offset + 24 bit fragment length
@@ -6777,7 +6820,7 @@ int tls_parse_certificate(struct TLSContext *context, const unsigned char *buf, 
         return 3 + size_of_all_certificates;
     res += 3;
     if (context->dtls) {
-        int dtls_check = _private_dtls_check_packet(buf, buf_len);
+        int dtls_check = _private_dtls_check_packet(context, buf, buf_len);
         if (dtls_check < 0)
             return dtls_check;
         res += 8;
@@ -7007,7 +7050,7 @@ int tls_parse_server_key_exchange(struct TLSContext *context, const unsigned cha
     unsigned int size = buf[0] * 0x10000 + buf[1] * 0x100 + buf[2];
     res += 3;
     if (context->dtls) {
-        int dtls_check = _private_dtls_check_packet(buf, buf_len);
+        int dtls_check = _private_dtls_check_packet(context, buf, buf_len);
         if (dtls_check < 0)
             return dtls_check;
         res += 8;
@@ -7241,7 +7284,7 @@ int tls_parse_client_key_exchange(struct TLSContext *context, const unsigned cha
     unsigned int size = buf[0] * 0x10000 + buf[1] * 0x100 + buf[2];
     res += 3;
     if (context->dtls) {
-        int dtls_check = _private_dtls_check_packet(buf, buf_len);
+        int dtls_check = _private_dtls_check_packet(context, buf, buf_len);
         if (dtls_check < 0)
             return dtls_check;
         res += 8;
@@ -7271,7 +7314,7 @@ int tls_parse_server_hello_done(struct TLSContext *context, const unsigned char 
     unsigned int size = buf[0] * 0x10000 + buf[1] * 0x100 + buf[2];
     res += 3;
     if (context->dtls) {
-        int dtls_check = _private_dtls_check_packet(buf, buf_len);
+        int dtls_check = _private_dtls_check_packet(context, buf, buf_len);
         if (dtls_check < 0)
             return dtls_check;
         res += 8;
@@ -7296,7 +7339,7 @@ int tls_parse_finished(struct TLSContext *context, const unsigned char *buf, int
     unsigned int size = buf[0] * 0x10000 + buf[1] * 0x100 + buf[2];
     res += 3;
     if (context->dtls) {
-        int dtls_check = _private_dtls_check_packet(buf, buf_len);
+        int dtls_check = _private_dtls_check_packet(context, buf, buf_len);
         if (dtls_check < 0)
             return dtls_check;
         res += 8;
@@ -7510,6 +7553,7 @@ int tls_parse_payload(struct TLSContext *context, const unsigned char *buf, int 
 #endif
     }
 
+    char local_buffer[DTLS_MAX_FRAGMENT_SIZE + 12];
     while ((buf_len >= 4) && (!context->critical_error)) {
         int payload_res = 0;
         unsigned char update_hash = 1;
@@ -7519,9 +7563,36 @@ int tls_parse_payload(struct TLSContext *context, const unsigned char *buf, int 
         unsigned int dtls_cookie_verified = 0;
         int certificate_verify_alert = no_error;
         unsigned int payload_size = buf[1] * 0x10000 + buf[2] * 0x100 + buf[3] + 3;
-        if (context->dtls)
+        if (context->dtls) {
             payload_size += 8;
-        CHECK_SIZE(payload_size + 1, buf_len, TLS_NEED_MORE_DATA)
+            if (context->fragment) {
+                CHECK_SIZE(payload_size - 11, context->fragment->written, TLS_NEED_MORE_DATA)
+
+                local_buffer[0] = type;
+
+                TLS_24_BIT(local_buffer, 1, context->fragment->written);
+
+                local_buffer[4] = buf[4];
+                local_buffer[5] = buf[5];
+
+                local_buffer[6] = 0;
+                local_buffer[7] = 0;
+                local_buffer[8] = 0;
+
+                TLS_24_BIT(local_buffer, 9, context->fragment->written);
+
+                memcpy(local_buffer + 12, context->fragment->buffer, context->fragment->written);
+                buf = local_buffer;
+
+                TLS_FREE(context->fragment->buffer);
+                TLS_FREE(context->fragment);
+                context->fragment = 0;
+            } else {
+                CHECK_SIZE(payload_size + 1, buf_len, TLS_NEED_MORE_DATA)
+            }
+        } else {
+            CHECK_SIZE(payload_size + 1, buf_len, TLS_NEED_MORE_DATA)
+        }
         switch (type) {
                 // hello request
             case 0x00:
@@ -7871,7 +7942,7 @@ int tls_parse_payload(struct TLSContext *context, const unsigned char *buf, int 
                 break;
 #endif
         }
-        payload_size++;
+        payload_size ++;
         buf += payload_size;
         buf_len -= payload_size;
     }
@@ -9469,14 +9540,62 @@ int tls_consume_stream(struct TLSContext *context, const unsigned char *buf, int
         tls_size_offset = 3;
         tls_header_size = 5;
     }
-    while (tls_buffer_len >= 5) {
+    while (tls_buffer_len >= tls_header_size) {
         unsigned int length = ntohs(*(unsigned short *)&context->message_buffer[index + tls_size_offset]) + tls_header_size;
         if (length > tls_buffer_len) {
             DEBUG_PRINT("NEED DATA: %i/%i\n", length, tls_buffer_len);
             break;
         }
-        int consumed = tls_parse_message(context, &context->message_buffer[index], length, certificate_verify);
-        DEBUG_PRINT("Consumed %i bytes\n", consumed);
+        int parse_message = 1;
+        int consumed = 0;
+        if (context->dtls) {
+            // check fragmented!
+            unsigned char *buffer = &context->message_buffer[index];
+            if ((buffer[0] == TLS_HANDSHAKE) && (length > 13)) {
+                buffer += tls_header_size;
+
+                unsigned int data_length = buffer[1] * 0x10000 + buffer[2] * 0x100 + buffer[3];
+                unsigned int fragment_offset = buffer[6] * 0x10000 + buffer[7] * 0x100 + buffer[8];
+                unsigned int fragment_length = buffer[9] * 0x10000 + buffer[10] * 0x100 + buffer[11];
+
+                if ((data_length > DTLS_MAX_FRAGMENT_SIZE) || (fragment_offset + fragment_length > data_length)) {
+                    exit(0);
+                    return TLS_BROKEN_PACKET;
+                }
+
+                if (data_length != fragment_length) {
+                    // fragmented!
+                    if (!context->fragment) {
+                        context->fragment = (struct DTLSFragment *)TLS_MALLOC(sizeof(struct DTLSFragment));
+                        if (context->fragment)
+                            memset(context->fragment, 0, sizeof(struct DTLSFragment));
+                    }
+
+                    if (!context->fragment)
+                        return TLS_NO_MEMORY;
+
+                    char *fragment_buffer = context->fragment->buffer;
+
+                    fragment_buffer = (char *)TLS_REALLOC(fragment_buffer, data_length * sizeof(char *));
+                    if (!fragment_buffer)
+                        return TLS_NO_MEMORY;
+
+                    memcpy(fragment_buffer + fragment_offset, &buffer[12], fragment_length);
+                    context->fragment->buffer = fragment_buffer;
+                    context->fragment->len = data_length;
+                    context->fragment->written += fragment_length;
+
+                    if (context->fragment->written != context->fragment->len) {
+                        consumed = length;
+                        parse_message = 0;
+                    }
+                }
+            }
+        }
+        if (parse_message)
+            consumed = tls_parse_message(context, &context->message_buffer[index], length, certificate_verify);
+
+        DEBUG_PRINT("Consumed %i/%i bytes\n", consumed, tls_buffer_len);
         if (consumed < 0) {
             if (!context->critical_error)
                 context->critical_error = 1;
@@ -9909,6 +10028,13 @@ int tls_sni_set(struct TLSContext *context, const char *sni) {
             }
         }
     }
+    return 0;
+}
+
+int tls_srtp_set(struct TLSContext *context) {
+    if ((!context) || (!context->dtls))
+        return TLS_GENERIC_ERROR;
+    context->dtls = 4;
     return 0;
 }
 
