@@ -149,6 +149,11 @@
     #define TLS_CIPHERS_SIZE(n, mitigated)         (n + mitigated) * 2
 #endif
 
+#define SRTP_AES128_CM_HMAC_SHA1_80 0x0001
+#define SRTP_AES128_CM_HMAC_SHA1_32 0x0002
+#define SRTP_NULL_HMAC_SHA1_80      0x0005
+#define SRTP_NULL_HMAC_SHA1_32      0x0006
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -338,6 +343,9 @@ int tls_request_client_certificate(struct TLSContext *context);
 int tls_client_verified(struct TLSContext *context);
 const char *tls_sni(struct TLSContext *context);
 int tls_sni_set(struct TLSContext *context, const char *sni);
+// set DTLS-SRTP mode for DTLS context
+int tls_srtp_set(struct TLSContext *context);
+int tls_srtp_key(struct TLSContext *context, unsigned char *buffer, unsigned int buf_len, unsigned char *salt, unsigned int salt_len);
 int tls_load_root_certificates(struct TLSContext *context, const unsigned char *pem_buffer, int pem_size);
 int tls_default_verify(struct TLSContext *context, struct TLSCertificate **certificate_chain, int len);
 void tls_print_certificate(const char *fname);
