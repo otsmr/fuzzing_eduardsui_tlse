@@ -10094,7 +10094,6 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
 
     switch (type) {
         case 0x0001:
-        case 0x0101:
             break;
         default:
             DEBUG_PRINT("UNSUPPORTED MESSAGE TYPE %x\n", (int)type);
