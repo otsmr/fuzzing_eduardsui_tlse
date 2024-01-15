@@ -347,6 +347,7 @@ int tls_sni_set(struct TLSContext *context, const char *sni);
 int tls_srtp_set(struct TLSContext *context);
 int tls_srtp_key(struct TLSContext *context, unsigned char *buffer, unsigned int buf_len, unsigned char *salt, unsigned int salt_len);
 int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned char is_ipv6, unsigned char *addr, unsigned int port, unsigned char *response_buffer);
+int tls_stun_build(unsigned char transaction_id[12], char *username, int username_len, char *pwd, int pwd_len, unsigned char *msg);
 int tls_is_stun(const unsigned char *msg, int len);
 int tls_cert_fingerprint(const char *pem_data, int len, char *buffer, unsigned int buf_len);
 int tls_load_root_certificates(struct TLSContext *context, const unsigned char *pem_buffer, int pem_size);
