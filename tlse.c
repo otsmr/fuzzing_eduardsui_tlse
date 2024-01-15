@@ -10140,7 +10140,7 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
 
         if (attr_len > msg_len)
             return TLS_GENERIC_ERROR;
-        DEBUG_PRINT("STUN ATTR %x\n", (int)attr_type);
+        DEBUG_PRINT("STUN ATTR 0x%04X\n", (int)attr_type);
         unsigned short temp;
         switch (attr_type) {
             case 0x0001:
@@ -10319,6 +10319,54 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
         return buffer_index;
     }
     return 0;
+}
+
+int tls_stun_build(unsigned char transaction_id[12], char *username, int username_len, char *pwd, int pwd_len, unsigned char *msg) {
+    if (!msg)
+        return 0;
+
+    *(unsigned short *)msg = htons(0x0001);
+    
+    msg[4] = 0x21;
+    msg[5] = 0x12;
+    msg[6] = 0xa4;
+    msg[7] = 0x42;
+
+    memcpy(msg + 8, transaction_id, 12);
+
+    unsigned char *ptr = msg + 20;
+
+    int len = 20;
+    if ((username) && (username_len > 0) && (username_len <= 513))  {
+        *(unsigned short *)&msg[20] = htons(0x0006);
+        *(unsigned short *)&msg[22] = htons(username_len);
+
+        len += 4;
+
+        memcpy(msg + len, username, username_len);
+        len += username_len;
+
+        while (len % 4)
+            msg[len ++] = 0;
+    }
+
+    *(unsigned short *)&msg[len] = htons(0x0008);
+    *(unsigned short *)&msg[len + 2] = htons(20);
+
+    len += 24;
+
+    *(unsigned short *)&msg[2] = htons(len - 20);
+
+    tls_init();
+
+    hmac_state hmac;
+    unsigned long hash_len = 20;
+
+    hmac_init(&hmac, find_hash("sha1"), pwd, pwd_len);
+    hmac_process(&hmac, msg, len - 24);
+    hmac_done(&hmac, msg + len - 20, &hash_len);
+
+    return len;
 }
 
 int tls_cert_fingerprint(const char *pem_data, int pem_size, char *buffer, unsigned int buf_len) {
