@@ -10237,7 +10237,7 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
                 // PRIORITY
                 if (attr_len != 4)
                     return TLS_BROKEN_PACKET;
-                priority = ntohl((uint32_t)&msg);
+                priority = ntohl(*(uint32_t *)&msg);
                 break;
         }
 
