@@ -10130,6 +10130,8 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
 
     int validated = 0;
 
+    uint32_t priority = 0;
+
     while (msg_len >= 4) {
         unsigned short attr_type = ntohs(*(unsigned short *)msg);
         int attr_len = ntohs(*(unsigned short *)&msg[2]);
@@ -10138,7 +10140,7 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
 
         if (attr_len > msg_len)
             return TLS_GENERIC_ERROR;
-
+        DEBUG_PRINT("STUN ATTR %x\n", (int)attr_type);
         unsigned short temp;
         switch (attr_type) {
             case 0x0001:
@@ -10147,7 +10149,7 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
             case 0x0006:
                 // USERNAME
                 if (attr_len > 513)
-                    return -1;
+                    return TLS_BROKEN_PACKET;
 
                 username = msg;
                 username_len = attr_len;
@@ -10217,14 +10219,14 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
             case 0x0014:
                 // REALM
                 if (attr_len > 763)
-                    return -1;
+                    return TLS_BROKEN_PACKET;
                 realm = msg;
                 realm_len = attr_len;
                 break;
             case 0x0015:
                 // NONCE
                 if (attr_len > 763)
-                    return -1;
+                    return TLS_BROKEN_PACKET;
                 nonce = msg;
                 nonce_len = attr_len;
                 break;
@@ -10233,6 +10235,9 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
                 break;
             case 0x0024:
                 // PRIORITY
+                if (attr_len != 4)
+                    return TLS_BROKEN_PACKET;
+                priority = ntohl((uint32_t)&msg);
                 break;
         }
 
@@ -10262,7 +10267,7 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
         // transaction ID
         memcpy(response_buffer + 8, stun_message + 8, 12);
 
-        // MAPPED-ADDRESS
+        // XOR-MAPPED-ADDRESS
         response_buffer[20] = 0x00;
         response_buffer[21] = 0x20;
 
