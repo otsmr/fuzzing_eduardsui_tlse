@@ -10053,6 +10053,270 @@ int tls_srtp_key(struct TLSContext *context, unsigned char *buffer, unsigned int
     return 0;
 }
 
+int tls_is_stun(const unsigned char *msg, int len) {
+    if ((!msg) || (len < 20))
+        return 0;
+
+    if ((msg[4] != 0x21) || (msg[5] != 0x12) || (msg[6] != 0xa4) || (msg[7] != 0x42))
+        return 0;
+
+    return 1;
+}
+
+int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned char is_ipv6, unsigned char *addr, unsigned int port, unsigned char *response_buffer) {
+    // not a stun message?
+    if ((!msg) || (len < 20)) {
+        DEBUG_PRINT("INVALID STUN PACKET\n");
+        return TLS_GENERIC_ERROR;
+    }
+
+    if ((msg[4] != 0x21) || (msg[5] != 0x12) || (msg[6] != 0xa4) || (msg[7] != 0x42)) {
+        DEBUG_PRINT("INVALID STUN PACKET (INVALID MAGIC COOKIE)\n");
+        return TLS_GENERIC_ERROR;
+    }
+
+    int addr_len = 4;
+    if (is_ipv6)
+        addr_len = 16;
+
+    unsigned char *stun_message = msg;
+
+    unsigned short type = ntohs(*(unsigned short *)msg);
+    int msg_len = ntohs(*(unsigned short *)&msg[2]);
+
+    if (msg_len > len - 20)
+        return -1;
+
+    const unsigned char *magic_cookie = &msg[4];
+    const unsigned char *transaction_id = &msg[8];
+
+    const char *attributes = &msg[20];
+
+    switch (type) {
+        case 0x0001:
+        case 0x0101:
+            break;
+        default:
+            DEBUG_PRINT("UNSUPPORTED MESSAGE TYPE %x\n", (int)type);
+            return TLS_FEATURE_NOT_SUPPORTED;
+    }
+
+    msg += 20;
+
+    unsigned char hash[20];
+    unsigned long hash_len = 20;
+
+    unsigned char md5_hash[16];
+
+    hmac_state hmac;
+    hash_state md5_state;
+
+    memset(hash, 0, sizeof(hash));
+    int stun_message_len = 20;
+
+    unsigned char secret[16];
+
+    char key[0x4CE];
+
+    unsigned char *username = (void *)0;
+    int username_len = 0;
+
+    unsigned char *realm = (void *)0;
+    int realm_len = 0;
+
+    unsigned char *nonce = (void *)0;
+    int nonce_len = 0;
+
+    char *ptr;
+
+    int validated = 0;
+
+    while (msg_len >= 4) {
+        unsigned short attr_type = ntohs(*(unsigned short *)msg);
+        int attr_len = ntohs(*(unsigned short *)&msg[2]);
+        msg += 4;
+        msg_len -= 4;
+
+        if (attr_len > msg_len)
+            return TLS_GENERIC_ERROR;
+
+        unsigned short temp;
+        switch (attr_type) {
+            case 0x0001:
+                // MAPPED-ADDRESS
+                break;
+            case 0x0006:
+                // USERNAME
+                if (attr_len > 513)
+                    return -1;
+
+                username = msg;
+                username_len = attr_len;
+                break;
+            case 0x0008:
+                // MESSAGE-INTEGRITY
+                if ((attr_len != 20) || (!username) || (!username_len))
+                    return -1;
+
+                tls_init();
+
+                // HMAC is computed on message of size including MESSAGE-INTEGRITY, but not including fingerprint (or other post-MESSAGE-INTEGRITY extensions)
+                temp = *(unsigned short *)&stun_message[2];
+                *(unsigned short *)&stun_message[2] = htons(stun_message_len + attr_len + 4 - 20);
+
+                if ((realm) && (realm_len > 0)) {
+                    ptr = key;
+                    memcpy(ptr, username, username_len);
+                    ptr += username_len;
+
+                    *ptr = ':';
+                    ptr ++;
+                
+                    if ((realm) && (realm_len > 0)) {
+                        memcpy(ptr, realm, realm_len);
+                        ptr += username_len;
+                        *ptr = ':';
+                        ptr ++;
+                    }
+
+                    memcpy(ptr, pwd, pwd_len);
+                    ptr += pwd_len;
+
+                    *ptr = 0;
+
+
+                    fprintf(stderr, "KEY: %s\n", key);
+                
+                    md5_init(&md5_state);
+                    md5_process(&md5_state, key, strlen(key));
+                    md5_done(&md5_state, md5_hash);
+
+                    DEBUG_DUMP_HEX_LABEL("HASH", md5_hash, 16);
+
+                    hmac_init(&hmac, find_hash("sha1"), md5_hash, 16);
+                } else
+                    hmac_init(&hmac, find_hash("sha1"), pwd, pwd_len);
+
+
+                hmac_process(&hmac, stun_message, stun_message_len);
+                hmac_done(&hmac, hash, &hash_len);
+
+                *(unsigned short *)&stun_message[2] = temp;
+
+                if (memcmp(msg, hash, 16)) {
+                    DEBUG_PRINT("MESSAGE-INTEGRITY check failed\n");
+                    return TLS_GENERIC_ERROR;
+                }
+                validated = 1;
+                break;
+            case 0x0009:
+                // ERROR-CODE
+                break;
+            case 0x000A:
+                // UNKNOWN-ATTRIBUTES
+                break;
+            case 0x0014:
+                // REALM
+                if (attr_len > 763)
+                    return -1;
+                realm = msg;
+                realm_len = attr_len;
+                break;
+            case 0x0015:
+                // NONCE
+                if (attr_len > 763)
+                    return -1;
+                nonce = msg;
+                nonce_len = attr_len;
+                break;
+            case 0x0020:
+                // XOR-MAPPED-ADDRESS
+                break;
+            case 0x0024:
+                // PRIORITY
+                break;
+        }
+
+        while (attr_len % 4)
+            attr_len ++;
+
+        msg_len -= attr_len;
+        msg += attr_len;
+        stun_message_len += attr_len + 4;
+    }
+    if (!validated)
+        return TLS_GENERIC_ERROR;
+
+    if (response_buffer) {
+        response_buffer[0] = 0x01;
+        response_buffer[1] = 0x01;
+
+        // size
+        response_buffer[2] = 0x00;
+        response_buffer[3] = 0x00;
+
+        response_buffer[4] = 0x21;
+        response_buffer[5] = 0x12;
+        response_buffer[6] = 0xa4;
+        response_buffer[7] = 0x42;
+
+        // transaction ID
+        memcpy(response_buffer + 8, stun_message + 8, 12);
+
+        // MAPPED-ADDRESS
+        response_buffer[20] = 0x00;
+        response_buffer[21] = 0x20;
+
+        *(unsigned short *)&response_buffer[22] = htons(addr_len + 4);
+
+        response_buffer[24] = 0x00;
+        if (is_ipv6)
+            response_buffer[25] = 0x02;
+        else
+            response_buffer[25] = 0x01;
+
+        *(unsigned short *)&response_buffer[26] = htons(port);
+
+        response_buffer[26] ^= response_buffer[4];
+        response_buffer[27] ^= response_buffer[5];
+
+        memcpy(response_buffer + 28, addr, addr_len);
+
+        int i;
+        for (i = 0; i < addr_len; i ++)
+            response_buffer[28 + i] ^= response_buffer[4 + i % 4];
+
+        int buffer_index = 28 + addr_len;
+
+        // padding
+        while (buffer_index % 4) {
+            response_buffer[buffer_index] = 0x00;
+            buffer_index ++;
+            response_buffer[22] ++;
+        }
+
+        // must be computed before to be included in hmac!!!
+        *(unsigned short *)&response_buffer[2] = htons(buffer_index + 4);
+
+        hmac_init(&hmac, find_hash("sha1"), pwd, pwd_len);
+        hmac_process(&hmac, response_buffer, buffer_index);
+        hmac_done(&hmac, response_buffer + buffer_index + 4, &hash_len);
+
+        // hmac
+        response_buffer[buffer_index] = 0x00;
+        response_buffer[buffer_index + 1] = 0x08;
+        response_buffer[buffer_index + 2] = 0x00;
+        response_buffer[buffer_index + 3] = 0x14;
+
+        buffer_index += 24;
+
+        DEBUG_DUMP_HEX_LABEL("STUN RESPONSE>>>>>>>>", response_buffer, buffer_index);
+
+        return buffer_index;
+    }
+    return 0;
+}
+
 int tls_cert_fingerprint(const char *pem_data, int pem_size, char *buffer, unsigned int buf_len) {
     unsigned int len = 0;
     if ((!buffer) || (!buf_len))
