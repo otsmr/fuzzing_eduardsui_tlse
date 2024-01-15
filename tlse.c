@@ -5812,12 +5812,12 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
                 // use_srtp
                 tls_packet_uint8(packet, 0x0E);
                 if (context->is_server) {
-                    tls_packet_uint16(packet, 2);
+                    tls_packet_uint16(packet, 1);
                     tls_packet_uint16(packet, SRTP_AES128_CM_HMAC_SHA1_32);
                     tls_packet_uint8(packet, 0);
                     extension_len += 5;
                 } else {
-                    tls_packet_uint16(packet, 12);
+                    tls_packet_uint16(packet, 4);
 
                     tls_packet_uint16(packet, SRTP_AES128_CM_HMAC_SHA1_80);
                     tls_packet_uint8(packet, 0);
@@ -10349,6 +10349,12 @@ int tls_stun_build(unsigned char transaction_id[12], char *username, int usernam
         while (len % 4)
             msg[len ++] = 0;
     }
+
+    *(unsigned short *)&msg[len] = htons(0x0025);
+    *(unsigned short *)&msg[len + 2] = htons(0);
+
+    len += 4;
+
 
     *(unsigned short *)&msg[len] = htons(0x0008);
     *(unsigned short *)&msg[len + 2] = htons(20);
