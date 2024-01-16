@@ -1298,8 +1298,8 @@ struct TLSRTCPeerConnection {
     struct TLSContext *remote_client;
     unsigned char stun_transcation_id[12];
 
-    char local_user[5 + 40];
-    char local_pwd[25 + 40];
+    char local_user[5];
+    char local_pwd[25];
 
     unsigned char *remote_user;
     int remote_user_len;
@@ -10681,10 +10681,6 @@ struct TLSRTCPeerConnection *tls_peerconnection_context(tls_validation_function 
         channel->certificate_verify = certificate_verify;
 
         channel->userdata = userdata;
-
-// DEBUG
-        sprintf(channel->local_user,  "%s", "a20cd00e");
-        sprintf(channel->local_pwd, "%s", "0f288578126bbe40e1b3853305f8c4cc");
     }
 
     return channel;
