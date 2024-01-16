@@ -1293,6 +1293,27 @@ struct TLSPacket {
     struct TLSContext *context;
 };
 
+struct TLSRTCPeerConnection {
+    struct TLSContext *local_server;
+    struct TLSContext *remote_client;
+    unsigned char stun_transcation_id[12];
+
+    char local_user[5 + 40];
+    char local_pwd[25 + 40];
+
+    unsigned char *remote_user;
+    int remote_user_len;
+    unsigned char *remote_pwd;
+    int remote_pwd_len;
+
+    tls_validation_function certificate_verify;
+
+    void *userdata;
+
+    unsigned char local_state;
+    unsigned char remote_state;
+};
+
 #ifdef SSL_COMPATIBLE_INTERFACE
 
 typedef int (*SOCKET_RECV_CALLBACK)(int socket, void *buffer, size_t length, int flags);
@@ -10636,6 +10657,270 @@ int tls_remote_error(struct TLSContext *context) {
 
     return context->error_code;
 }
+
+struct TLSRTCPeerConnection *tls_peerconnection_context(tls_validation_function certificate_verify, void *userdata) {
+    const char pwd_chars[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_/";
+    struct TLSRTCPeerConnection *channel = (struct TLSRTCPeerConnection *)TLS_MALLOC(sizeof(struct TLSRTCPeerConnection));
+    if (channel) {
+        memset(channel, 0, sizeof(struct TLSRTCPeerConnection));
+        tls_random(channel->stun_transcation_id, 12);
+
+        unsigned char buffer[32];
+        tls_random(channel->stun_transcation_id, 32);
+
+        int i;
+        for (i = 0; i < 4; i ++)
+            channel->local_user[i] = 'A' + buffer[i] % 25;
+        channel->local_user[4] = 0;
+
+        for (i = 0; i < 24; i ++)
+            channel->local_pwd[i] = pwd_chars[buffer[i + 4] % sizeof(pwd_chars)];
+
+        channel->local_pwd[24] = 0;
+
+        channel->certificate_verify = certificate_verify;
+
+        channel->userdata = userdata;
+
+// DEBUG
+        sprintf(channel->local_user,  "%s", "a20cd00e");
+        sprintf(channel->local_pwd, "%s", "0f288578126bbe40e1b3853305f8c4cc");
+    }
+
+    return channel;
+}
+
+struct TLSContext *tls_peerconnection_local_dtls_context(struct TLSRTCPeerConnection *channel) {
+    if (!channel)
+        return NULL;
+
+    return channel->local_server;
+}
+
+struct TLSContext *tls_peerconnection_remote_dtls_context(struct TLSRTCPeerConnection *channel) {
+    if (!channel)
+        return NULL;
+
+    return channel->remote_client;
+}
+
+int tls_peerconnection_remote_credentials(struct TLSRTCPeerConnection *channel, char *remote_username, int remote_username_len, char *remote_pwd, int remote_pwd_len) {
+    if (!channel)
+        return TLS_GENERIC_ERROR;
+
+    if (channel->remote_user) {
+        TLS_FREE(channel->remote_user);
+        channel->remote_user = NULL;
+        channel->remote_user_len = 0;
+    }
+
+    if (channel->remote_pwd) {
+        TLS_FREE(channel->remote_pwd);
+        channel->remote_pwd = NULL;
+        channel->remote_pwd_len = 0;
+    }
+
+    if ((remote_username) && (remote_username_len > 0)) {
+        channel->remote_user = TLS_MALLOC(remote_username_len + 1);
+        if (!channel->remote_user)
+            return TLS_NO_MEMORY;
+
+        memcpy(channel->remote_user, remote_username, remote_username_len);
+        channel->remote_user[remote_username_len] = 0;
+        channel->remote_user_len = remote_username_len;
+    }
+
+    if ((remote_pwd) && (remote_pwd_len > 0)) {
+        channel->remote_pwd = TLS_MALLOC(remote_pwd_len + 1);
+        if (!channel->remote_pwd)
+            return TLS_NO_MEMORY;
+
+        memcpy(channel->remote_pwd, remote_pwd, remote_pwd_len);
+        channel->remote_pwd[remote_pwd_len] = 0;
+        channel->remote_pwd_len = remote_pwd_len;
+    }
+
+    return 0;
+}
+
+const char *tls_peerconnection_local_pwd(struct TLSRTCPeerConnection *channel) {
+    if (!channel)
+        return NULL;
+
+    return channel->local_pwd;
+}
+
+const char *tls_peerconnection_local_username(struct TLSRTCPeerConnection *channel) {
+    if (!channel)
+        return NULL;
+
+    return channel->local_user;
+}
+
+void *tls_peerconnection_userdata(struct TLSRTCPeerConnection *channel) {
+    if (!channel)
+        return NULL;
+
+    return channel->userdata;
+}
+
+int tls_peerconnection_load_keys(struct TLSRTCPeerConnection *channel, const unsigned char *pem_pub_key, int pem_pub_key_size, const unsigned char *pem_priv_key, int pem_priv_key_size) {
+    if (!channel->local_server) {
+        channel->local_server = tls_create_context(1, DTLS_V12);
+        tls_srtp_set(channel->remote_client);
+        channel->local_server->is_child = 1;
+    }
+
+    if (tls_load_certificates(channel->local_server, pem_pub_key, pem_pub_key_size) < 0)
+        return TLS_UNSUPPORTED_CERTIFICATE;
+
+    if (tls_load_private_key(channel->local_server, pem_priv_key, pem_priv_key_size) < 0)
+        return TLS_UNSUPPORTED_CERTIFICATE;
+
+    return 0;
+}
+
+int tls_peerconnection_connect(struct TLSRTCPeerConnection *channel, tls_peerconnection_write_function write_function) {
+    if ((!channel) || (!channel->remote_pwd) || (!channel->remote_user))
+        return TLS_GENERIC_ERROR;
+
+    if (channel->remote_client) {
+        tls_destroy_context(channel->remote_client);
+        channel->remote_client = NULL;
+    }
+
+    char msg[1024];
+    int len = tls_stun_build(channel->stun_transcation_id, channel->remote_user, channel->remote_user_len, channel->remote_pwd, channel->remote_pwd_len, msg);
+    if (len < 0)
+        return 0;
+
+    return write_function(channel, msg, len);
+}
+
+int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned char *buf, int buf_len, unsigned char *addr, int port, unsigned char is_ipv6, tls_peerconnection_write_function write_function) {
+    if ((!buf) || (buf_len <= 0))
+        return 0;
+
+    int err;
+    struct TLSContext *context = NULL;
+
+    if (tls_is_stun(buf, buf_len)) {
+        DEBUG_PRINT("RECEIVED STUN PACKET\n");
+        unsigned char response_buffer[0x8000];
+        int len = tls_stun_parse(buf, buf_len, channel->local_pwd, strlen(channel->local_pwd), is_ipv6, addr, port, response_buffer);
+        if (len <= 0)
+            return len;
+
+        if (!channel->remote_state) {
+            channel->remote_state = 1;
+
+            if (!channel->remote_client) {
+                channel->remote_client = tls_create_context(0, DTLS_V12);
+                tls_srtp_set(channel->remote_client);
+            }
+
+            err = tls_client_connect(channel->remote_client);
+            if (err < 0)
+                return err;
+
+            context = channel->remote_client;
+        }
+
+        int err = write_function(channel, response_buffer, len);
+        if (err > 0) {
+            if (context) {
+                unsigned int out_buffer_len = 0;
+                const unsigned char *out_buffer = tls_get_message(context, &out_buffer_len, 0);
+                if ((out_buffer) && (out_buffer_len)) {
+                    err = write_function(channel, out_buffer, out_buffer_len);
+                    if (err > 0)
+                        tls_buffer_clear(context);
+                }
+            }
+        }
+        return err;
+    }
+
+    if ((buf[0] >= 20)  && (buf[0] <= 64)) {
+        DEBUG_PRINT("RECEIVED DTLS PACKET\n");
+        if ((channel->remote_state >= 1) && (channel->remote_state <= 2) && (channel->remote_client)) {
+            DEBUG_PRINT("CLIENT-MODE DTLS PACKET\n");
+            if (channel->remote_state == 1)
+                channel->remote_state = 2;
+            err = tls_consume_stream(channel->remote_client, buf, buf_len, channel->certificate_verify);
+
+            if (err)
+                return err;
+
+            if (tls_established(channel->remote_client) == 1) {
+                DEBUG_PRINT("HAVE REMOTE SRTP KEY\n");
+                channel->remote_state = 3;
+            }
+
+            context = channel->remote_client;
+        } else
+        if ((channel->local_state >= 1) && (channel->local_state <= 2) && (channel->local_server)) {
+            DEBUG_PRINT("SERVER-MODE DTLS PACKET\n");
+            if (channel->local_state == 1)
+                channel->local_state = 2;
+
+            channel->local_server->is_child = 1;
+            err = tls_consume_stream(channel->local_server, buf, buf_len, channel->certificate_verify);
+            channel->local_server->is_child = 0;
+
+            if (err)
+                return err;
+
+            channel->local_server->is_child = 1;
+            if (tls_established(channel->local_server) == 1) {
+                DEBUG_PRINT("HAVE LOCAL SRTP KEY\n");
+                channel->local_state = 3;
+            }
+            channel->local_server->is_child = 0;
+
+            context = channel->local_server;
+        }
+
+        if (context) {
+            unsigned int out_buffer_len = 0;
+            const unsigned char *out_buffer = tls_get_message(context, &out_buffer_len, 0);
+            if ((out_buffer) && (out_buffer_len)) {
+                err = write_function(channel, out_buffer, out_buffer_len);
+                if (err > 0) {
+                    tls_buffer_clear(context);
+                }
+            }
+            return err;
+        }
+    }
+
+    if ((buf[0] >= 128) && (buf[0] <= 191)) {
+        DEBUG_PRINT("RECEIVED RTP PACKET\n");
+        // to do
+        return 0;
+    }
+    return 0;
+}
+
+void tls_destroy_datachannel(struct TLSRTCPeerConnection *channel) {
+    if (!channel)
+        return;
+
+    if (channel->local_server) {
+        channel->local_server->is_child = 0;
+        tls_destroy_context(channel->local_server);
+    }
+    if (channel->remote_client)
+        tls_destroy_context(channel->remote_client);
+
+    if (channel->remote_user)
+        TLS_FREE(channel->remote_user);
+    if (channel->remote_pwd)
+        TLS_FREE(channel->remote_pwd);
+
+    TLS_FREE(channel);
+}
+
 
 #ifdef SSL_COMPATIBLE_INTERFACE
 
