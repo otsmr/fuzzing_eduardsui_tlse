@@ -153,6 +153,8 @@
 #define SRTP_AES128_CM_HMAC_SHA1_32 0x0002
 #define SRTP_NULL_HMAC_SHA1_80      0x0005
 #define SRTP_NULL_HMAC_SHA1_32      0x0006
+#define SRTP_AEAD_AES_128_GCM       0x0007
+#define SRTP_AEAD_AES_256_GCM       0x0008
 
 #ifdef __cplusplus
 extern "C" {
@@ -356,8 +358,7 @@ int tls_is_stun(const unsigned char *msg, int len);
 typedef int (*tls_peerconnection_write_function)(struct TLSRTCPeerConnection *channel, const unsigned char *msg, int msg_len);
 
 struct TLSRTCPeerConnection *tls_peerconnection_context(tls_validation_function certificate_verify, void *userdata);
-struct TLSContext *tls_peerconnection_local_dtls_context(struct TLSRTCPeerConnection *channel);
-struct TLSContext *tls_peerconnection_remote_dtls_context(struct TLSRTCPeerConnection *channel);
+struct TLSContext *tls_peerconnection_dtls_context(struct TLSRTCPeerConnection *channel);
 int tls_peerconnection_remote_credentials(struct TLSRTCPeerConnection *channel, char *remote_username, int remote_username_len, char *remote_pwd, int remote_pwd_len);
 const char *tls_peerconnection_local_pwd(struct TLSRTCPeerConnection *channel);
 const char *tls_peerconnection_local_username(struct TLSRTCPeerConnection *channel);
