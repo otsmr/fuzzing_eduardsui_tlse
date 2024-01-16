@@ -195,6 +195,8 @@ struct TLSContext;
 struct ECCCurveParameters;
 typedef struct TLSContext TLS;
 typedef struct TLSCertificate Certificate;
+// webrtc datachannel
+struct TLSRTCPeerConnection;
 
 typedef int (*tls_validation_function)(struct TLSContext *context, struct TLSCertificate **certificate_chain, int len);
 
@@ -346,9 +348,25 @@ int tls_sni_set(struct TLSContext *context, const char *sni);
 // set DTLS-SRTP mode for DTLS context
 int tls_srtp_set(struct TLSContext *context);
 int tls_srtp_key(struct TLSContext *context, unsigned char *buffer, unsigned int buf_len, unsigned char *salt, unsigned int salt_len);
+
 int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned char is_ipv6, unsigned char *addr, unsigned int port, unsigned char *response_buffer);
 int tls_stun_build(unsigned char transaction_id[12], char *username, int username_len, char *pwd, int pwd_len, unsigned char *msg);
 int tls_is_stun(const unsigned char *msg, int len);
+
+typedef int (*tls_peerconnection_write_function)(struct TLSRTCPeerConnection *channel, const unsigned char *msg, int msg_len);
+
+struct TLSRTCPeerConnection *tls_peerconnection_context(tls_validation_function certificate_verify, void *userdata);
+struct TLSContext *tls_peerconnection_local_dtls_context(struct TLSRTCPeerConnection *channel);
+struct TLSContext *tls_peerconnection_remote_dtls_context(struct TLSRTCPeerConnection *channel);
+int tls_peerconnection_remote_credentials(struct TLSRTCPeerConnection *channel, char *remote_username, int remote_username_len, char *remote_pwd, int remote_pwd_len);
+const char *tls_peerconnection_local_pwd(struct TLSRTCPeerConnection *channel);
+const char *tls_peerconnection_local_username(struct TLSRTCPeerConnection *channel);
+void *tls_peerconnection_userdata(struct TLSRTCPeerConnection *channel);
+int tls_peerconnection_load_keys(struct TLSRTCPeerConnection *channel, const unsigned char *pem_pub_key, int pem_pub_key_size, const unsigned char *pem_priv_key, int pem_priv_key_size);
+int tls_peerconnection_connect(struct TLSRTCPeerConnection *channel, tls_peerconnection_write_function write_function);
+int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned char *buf, int buf_len, unsigned char *addr, int port, unsigned char is_ipv6, tls_peerconnection_write_function write_function);
+void tls_destroy_datachannel(struct TLSRTCPeerConnection *channel);
+
 int tls_cert_fingerprint(const char *pem_data, int len, char *buffer, unsigned int buf_len);
 int tls_load_root_certificates(struct TLSContext *context, const unsigned char *pem_buffer, int pem_size);
 int tls_default_verify(struct TLSContext *context, struct TLSCertificate **certificate_chain, int len);
