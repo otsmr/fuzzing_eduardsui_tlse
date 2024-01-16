@@ -10090,6 +10090,24 @@ int tls_is_stun(const unsigned char *msg, int len) {
     return 1;
 }
 
+uint32_t _private_tls_crc32(const unsigned char *s, int n) {
+	uint32_t crc = 0xFFFFFFFF;
+	int i;
+    int j;
+
+	for (i = 0; i < n; i++) {
+		char ch = s[i];
+		for (j = 0; j < 8; j ++) {
+			uint32_t b = (ch ^ crc) & 1;
+			crc >>= 1;
+			if (b)
+                crc=crc^0xEDB88320;
+			ch >>= 1;
+		}
+	}
+	return ~crc;
+}
+
 int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned char is_ipv6, unsigned char *addr, unsigned int port, unsigned char *response_buffer) {
     // not a stun message?
     if ((!msg) || (len < 20)) {
@@ -10341,6 +10359,18 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
 
         buffer_index += 24;
 
+        response_buffer[buffer_index ++] = 0x80;
+        response_buffer[buffer_index ++] = 0x28;
+        response_buffer[buffer_index ++] = 0x00;
+        response_buffer[buffer_index ++] = 0x04;
+
+        *(unsigned short *)&response_buffer[2] = htons(buffer_index - 16);
+
+        uint32_t fingerprint = _private_tls_crc32(response_buffer, buffer_index - 4) ^ 0x5354554e;
+        *(uint32_t *)&response_buffer[buffer_index] = htonl(fingerprint);
+
+        buffer_index += 4;
+
         DEBUG_DUMP_HEX_LABEL("STUN RESPONSE>>>>>>>>", response_buffer, buffer_index);
 
         return buffer_index;
@@ -10398,6 +10428,18 @@ int tls_stun_build(unsigned char transaction_id[12], char *username, int usernam
     hmac_init(&hmac, find_hash("sha1"), pwd, pwd_len);
     hmac_process(&hmac, msg, len - 24);
     hmac_done(&hmac, msg + len - 20, &hash_len);
+
+    msg[len ++] = 0x80;
+    msg[len ++] = 0x28;
+    msg[len ++] = 0x00;
+    msg[len ++] = 0x04;
+
+    *(unsigned short *)&msg[2] = htons(len - 16);
+
+    uint32_t fingerprint = _private_tls_crc32(msg, len - 4) ^ 0x5354554e;
+    *(uint32_t *)&msg[len] = htonl(fingerprint);
+
+    len += 4;
 
     return len;
 }
