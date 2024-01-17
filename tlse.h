@@ -349,7 +349,7 @@ const char *tls_sni(struct TLSContext *context);
 int tls_sni_set(struct TLSContext *context, const char *sni);
 // set DTLS-SRTP mode for DTLS context
 int tls_srtp_set(struct TLSContext *context);
-int tls_srtp_key(struct TLSContext *context, unsigned char *buffer, unsigned int buf_len, unsigned char *salt, unsigned int salt_len);
+int tls_srtp_key(struct TLSContext *context, unsigned char *buffer);
 
 int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned char is_ipv6, unsigned char *addr, unsigned int port, unsigned char *response_buffer);
 int tls_stun_build(unsigned char transaction_id[12], char *username, int username_len, char *pwd, int pwd_len, unsigned char *msg);
@@ -357,7 +357,7 @@ int tls_is_stun(const unsigned char *msg, int len);
 
 typedef int (*tls_peerconnection_write_function)(struct TLSRTCPeerConnection *channel, const unsigned char *msg, int msg_len);
 
-struct TLSRTCPeerConnection *tls_peerconnection_context(tls_validation_function certificate_verify, void *userdata);
+struct TLSRTCPeerConnection *tls_peerconnection_context(unsigned char active, tls_validation_function certificate_verify, void *userdata);
 struct TLSContext *tls_peerconnection_dtls_context(struct TLSRTCPeerConnection *channel);
 int tls_peerconnection_remote_credentials(struct TLSRTCPeerConnection *channel, char *remote_username, int remote_username_len, char *remote_pwd, int remote_pwd_len);
 const char *tls_peerconnection_local_pwd(struct TLSRTCPeerConnection *channel);
