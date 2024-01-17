@@ -1293,6 +1293,10 @@ struct TLSPacket {
     struct TLSContext *context;
 };
 
+#define SRTP_MASTER_KEY_LEN         30
+#define SRTP_MASTER_KEY_KEY_LEN     16
+#define SRTP_MASTER_KEY_SALT_LEN        14
+
 struct TLSRTCPeerConnection {
     struct TLSContext *context;
     unsigned char stun_transcation_id[12];
@@ -1311,6 +1315,8 @@ struct TLSRTCPeerConnection {
 
     unsigned char local_state;
     unsigned char remote_state;
+
+    unsigned char active;
 };
 
 #ifdef SSL_COMPATIBLE_INTERFACE
@@ -5656,6 +5662,11 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
                 } else 
 #endif
                 {
+                    if (context->dtls == 4) {
+                        // use_srtp
+                        extension_len += 9;
+                    }
+
                     tls_packet_uint16(packet, 5 + extension_len);
                     // secure renegotation
                     // advertise it, but refuse renegotiation
@@ -5681,6 +5692,13 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
                     tls_packet_uint8(packet, alpn_negotiated_len);
                     tls_packet_append(packet, (unsigned char *)context->negotiated_alpn, alpn_negotiated_len);
                 }
+                 if (context->dtls == 4) {
+                    tls_packet_uint16(packet, 0x0E);
+                    tls_packet_uint16(packet, 5);
+                    tls_packet_uint16(packet, 2);
+                    tls_packet_uint16(packet, SRTP_AES128_CM_HMAC_SHA1_32);
+                    tls_packet_uint8(packet, 0);
+                 }
             }
 #endif
         } else {
@@ -5831,7 +5849,7 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
             if ((context->version == TLS_V12) || (context->version == DTLS_V12) || (context->version == TLS_V13) || (context->version == DTLS_V13)) {
                 if (context->dtls == 4) {
                     // use_srtp
-                    extension_len += 15;
+                    extension_len += 9;// 15;
                 }
 
                 int sni_len = 0;
@@ -5902,13 +5920,19 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
 
                  if (context->dtls == 4) {
                     tls_packet_uint16(packet, 0x0E);
+                    tls_packet_uint16(packet, 5);
+                    tls_packet_uint16(packet, 2);
+                    tls_packet_uint16(packet, SRTP_AES128_CM_HMAC_SHA1_32);
+                    tls_packet_uint8(packet, 0);
+
+                    /* tls_packet_uint16(packet, 0x0E);
                     tls_packet_uint16(packet, 11);
                     tls_packet_uint16(packet, 8);
                     tls_packet_uint16(packet, SRTP_AEAD_AES_128_GCM);
                     tls_packet_uint16(packet, SRTP_AEAD_AES_256_GCM);
                     tls_packet_uint16(packet, SRTP_AES128_CM_HMAC_SHA1_80);
                     tls_packet_uint16(packet, SRTP_AES128_CM_HMAC_SHA1_32);
-                    tls_packet_uint8(packet, 0);
+                    tls_packet_uint8(packet, 0); */
                  }
 
             }
@@ -7642,6 +7666,17 @@ int tls_parse_payload(struct TLSContext *context, const unsigned char *buf, int 
             case 0x01:
                 DEBUG_PRINT(" => CLIENT HELLO\n");
                 CHECK_HANDSHAKE_STATE(context, 1, (context->dtls ? 2 : 1));
+                if ((context->dtls == 4) && (!context->is_server) && (context->connection_status == 0)) {
+                    DEBUG_PRINT("SRTP HANDSHAKE: SWITCHING FROM CLIENT TO SERVER\n");
+                    context->is_server = 1;
+                    context->certificates = context->client_certificates;
+                    context->certificates_count = context->client_certificates_count;
+                    context->request_client_certificate = 1;
+                    
+                    context->client_certificates = NULL;
+                    context->client_certificates_count = 0;
+                }
+
                 if (context->is_server) {
                     payload_res = tls_parse_hello(context, buf + 1, payload_size, &write_packets, &dtls_cookie_verified);
                     DEBUG_PRINT(" => DTLS COOKIE VERIFIED: %i (%i)\n", dtls_cookie_verified, payload_res);
@@ -7794,7 +7829,7 @@ int tls_parse_payload(struct TLSContext *context, const unsigned char *buf, int 
                 DEBUG_PRINT(" => NOT UNDERSTOOD PAYLOAD TYPE: %x\n", (int)type);
                 return TLS_NOT_UNDERSTOOD;
         }
-        if ((type != 0x00) && (update_hash))
+        if ((type != 0x00) && (update_hash) && (payload_res != TLS_UNEXPECTED_MESSAGE))
             _private_tls_update_hash(context, buf, payload_size + 1);
         
         if (certificate_verify_alert != no_error) {
@@ -8026,9 +8061,12 @@ int tls_parse_message(struct TLSContext *context, unsigned char *buf, int buf_le
     buf_pos += 2;
 
     uint64_t dtls_sequence_number = 0;
+    unsigned short dtls_epoch = 0;
     if (context->dtls) {
         CHECK_SIZE(buf_pos + 8, buf_len, TLS_NEED_MORE_DATA)
+        dtls_epoch = ntohs(*(unsigned short *)&buf[buf_pos]);
         dtls_sequence_number = ntohll(*(uint64_t *)&buf[buf_pos]);
+
         buf_pos += 8;
     }
 
@@ -8306,7 +8344,12 @@ int tls_parse_message(struct TLSContext *context, unsigned char *buf, int buf_le
             }
         }
     }
-    context->remote_sequence_number++;
+    if (context->dtls) {
+        context->dtls_epoch_remote = dtls_epoch;
+        context->remote_sequence_number = dtls_sequence_number & 0xFFFFFFFFFFFF;
+    } else
+        context->remote_sequence_number ++;
+
 #ifdef WITH_TLS_13
     if ((context->version == TLS_V13) || (context->version == DTLS_V13)) {
         if (/*(context->connection_status == 2) && */(type == TLS_APPLICATION_DATA) && (context->crypto.created)) {
@@ -10069,15 +10112,20 @@ int tls_srtp_set(struct TLSContext *context) {
     return 0;
 }
 
-int tls_srtp_key(struct TLSContext *context, unsigned char *buffer, unsigned int buf_len, unsigned char *salt, unsigned int salt_len) {
-    if ((!buffer) || (!buf_len) || (!context->master_key) || (!context->master_key_len))
+int tls_srtp_key(struct TLSContext *context, unsigned char *buffer) {
+    if ((!context->master_key) || (!context->master_key_len))
         return TLS_GENERIC_ERROR;
 
-    const char *key_label = "EXTRACTOR-dtls_srtp";
-    int key_label_len = strlen(key_label);
+    unsigned char material[SRTP_MASTER_KEY_LEN << 1];
 
-    _private_tls_prf_helper(find_hash("sha1"), 20, buffer, buf_len, context->master_key, context->master_key_len, (unsigned char *)key_label, key_label_len, salt, salt_len, NULL, 0);
-    return 0;
+    if (context->is_server)
+        _private_tls_prf(context, material, sizeof(material), context->master_key, context->master_key_len, (unsigned char *)"EXTRACTOR-dtls_srtp", 19, context->local_random, TLS_SERVER_RANDOM_SIZE, context->remote_random, TLS_CLIENT_RANDOM_SIZE);
+    else
+        _private_tls_prf(context, material, sizeof(material), context->master_key, context->master_key_len, (unsigned char *)"EXTRACTOR-dtls_srtp", 19, context->remote_random, TLS_SERVER_RANDOM_SIZE, context->local_random, TLS_CLIENT_RANDOM_SIZE);
+
+    if (buffer)
+        memcpy(buffer, material, sizeof(material));
+    return sizeof(material);
 }
 
 int tls_is_stun(const unsigned char *msg, int len) {
@@ -10706,7 +10754,7 @@ int tls_remote_error(struct TLSContext *context) {
     return context->error_code;
 }
 
-struct TLSRTCPeerConnection *tls_peerconnection_context(tls_validation_function certificate_verify, void *userdata) {
+struct TLSRTCPeerConnection *tls_peerconnection_context(unsigned char active, tls_validation_function certificate_verify, void *userdata) {
     const char pwd_chars[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_/";
     struct TLSRTCPeerConnection *channel = (struct TLSRTCPeerConnection *)TLS_MALLOC(sizeof(struct TLSRTCPeerConnection));
     if (channel) {
@@ -10727,7 +10775,7 @@ struct TLSRTCPeerConnection *tls_peerconnection_context(tls_validation_function 
         channel->local_pwd[24] = 0;
 
         channel->certificate_verify = certificate_verify;
-
+        channel->active = active;
         channel->userdata = userdata;
     }
 
@@ -10803,8 +10851,11 @@ void *tls_peerconnection_userdata(struct TLSRTCPeerConnection *channel) {
 
 int tls_peerconnection_load_keys(struct TLSRTCPeerConnection *channel, const unsigned char *pem_pub_key, int pem_pub_key_size, const unsigned char *pem_priv_key, int pem_priv_key_size) {
     if (!channel->context) {
-        channel->context = tls_create_context(0, DTLS_V12);
+        channel->context = tls_create_context(!channel->active, DTLS_V12);
         tls_srtp_set(channel->context);
+
+        if (channel->context->is_server)
+            channel->context->request_client_certificate = 1;
     }
 
     if (tls_load_certificates(channel->context, pem_pub_key, pem_pub_key_size) < 0)
@@ -10856,7 +10907,7 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
                 tls_peerconnection_connect(channel, write_function);
         }
 
-        if ((type == 0x0101) && (channel->remote_state == 1)) {
+        if ((type == 0x0101) && (channel->remote_state == 1) && (channel->active)) {
             err = tls_client_connect(channel->context);
             if (err < 0)
                 return err;
@@ -10883,19 +10934,26 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
     }
 
     if ((buf[0] >= 20)  && (buf[0] <= 64)) {
-        DEBUG_PRINT("RECEIVED DTLS PACKET (%i)\n");
+        DEBUG_PRINT("RECEIVED DTLS PACKET\n");
         if (channel->remote_state == 1)
             channel->remote_state = 2;
 
         err = tls_consume_stream(channel->context, buf, buf_len, channel->certificate_verify);
-
-        if (tls_established(channel->context)) {
+        if (channel->context->connection_status >= 2) {
             DEBUG_PRINT("******** HAVE REMOTE SRTP KEY ***********\n");
             channel->remote_state = 3;
-        }
 
-        if (err < 0)
-            return err;
+            unsigned char key_buffer[64];
+            int key_size = tls_srtp_key(channel->context, key_buffer);
+
+            if (key_size > 0) {
+                DEBUG_DUMP_HEX_LABEL("SRTP KEY", key_buffer, key_size);
+
+                struct SRTPContext *srtp_context = srtp_init(SRTP_AES_CM, SRTP_AUTH_HMAC_SHA1);
+                srtp_key(srtp_context, key_buffer, 16, key_buffer + 16, 14, 32);
+                srtp_destroy(srtp_context);
+            }
+        }
 
         context = channel->context;
 
@@ -10910,6 +10968,11 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
             }
             return err;
         }
+
+        if (err < 0)
+            return err;
+
+        return 0;
     }
 
     if ((buf[0] >= 128) && (buf[0] <= 191)) {
