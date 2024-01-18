@@ -5666,23 +5666,27 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
                         // use_srtp
                         extension_len += 9;
                     }
-
-                    tls_packet_uint16(packet, 5 + extension_len);
-                    // secure renegotation
-                    // advertise it, but refuse renegotiation
-                    tls_packet_uint16(packet, 0xff01);
+                    if (context->dtls) {
+                        if (extension_len)
+                            tls_packet_uint16(packet, extension_len);
+                    } else {
+                        tls_packet_uint16(packet, 5 + extension_len);
+                        // secure renegotation
+                        // advertise it, but refuse renegotiation
+                        tls_packet_uint16(packet, 0xff01);
 #ifdef TLS_ACCEPT_SECURE_RENEGOTIATION
-                    // a little defensive
-                    if ((context->verify_len) && (!context->verify_data))
-                        context->verify_len = 0;
-                    tls_packet_uint16(packet, context->verify_len + 1);
-                    tls_packet_uint8(packet, context->verify_len);
-                    if (context->verify_len)
-                        tls_packet_append(packet, (unsigned char *)context->verify_data, context->verify_len);
+                        // a little defensive
+                        if ((context->verify_len) && (!context->verify_data))
+                            context->verify_len = 0;
+                        tls_packet_uint16(packet, context->verify_len + 1);
+                        tls_packet_uint8(packet, context->verify_len);
+                        if (context->verify_len)
+                            tls_packet_append(packet, (unsigned char *)context->verify_data, context->verify_len);
 #else
-                    tls_packet_uint16(packet, 1);
-                    tls_packet_uint8(packet, 0);
+                        tls_packet_uint16(packet, 1);
+                        tls_packet_uint8(packet, 0);
 #endif
+                    }
                 }
                 if (alpn_len) {
                     tls_packet_uint16(packet, 0x10);
@@ -5692,13 +5696,13 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
                     tls_packet_uint8(packet, alpn_negotiated_len);
                     tls_packet_append(packet, (unsigned char *)context->negotiated_alpn, alpn_negotiated_len);
                 }
-                 if (context->dtls == 4) {
+                if (context->dtls == 4) {
                     tls_packet_uint16(packet, 0x0E);
                     tls_packet_uint16(packet, 5);
                     tls_packet_uint16(packet, 2);
-                    tls_packet_uint16(packet, SRTP_AES128_CM_HMAC_SHA1_32);
+                    tls_packet_uint16(packet, SRTP_AES128_CM_HMAC_SHA1_80);
                     tls_packet_uint8(packet, 0);
-                 }
+                }
             }
 #endif
         } else {
@@ -5922,7 +5926,7 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
                     tls_packet_uint16(packet, 0x0E);
                     tls_packet_uint16(packet, 5);
                     tls_packet_uint16(packet, 2);
-                    tls_packet_uint16(packet, SRTP_AES128_CM_HMAC_SHA1_32);
+                    tls_packet_uint16(packet, SRTP_AES128_CM_HMAC_SHA1_80);
                     tls_packet_uint8(packet, 0);
 
                     /* tls_packet_uint16(packet, 0x0E);
@@ -6112,11 +6116,25 @@ struct TLSPacket *tls_certificate_request(struct TLSContext *context) {
         } else
 #endif
         {
+#ifdef TLS_ECDSA_SUPPORTED
+            tls_packet_uint8(packet, 2);
+            tls_packet_uint8(packet, rsa_sign);
+            tls_packet_uint8(packet, ecdsa_sign);
+#else
             tls_packet_uint8(packet, 1);
             tls_packet_uint8(packet, rsa_sign);
+#endif
             if ((context->version == TLS_V12) || (context->version == DTLS_V12)) {
-                // 10 pairs or 2 bytes
+                // 10 pairs of 2 bytes
+#ifdef TLS_ECDSA_SUPPORTED
+                tls_packet_uint16(packet, 14);
+                // ecdsa_secp256r1_sha256
+                tls_packet_uint16(packet, 0x0403);
+                // // ecdsa_secp384r1_sha384
+                tls_packet_uint16(packet, 0x0503);
+#else
                 tls_packet_uint16(packet, 10);
+#endif
                 tls_packet_uint8(packet, sha256);
                 tls_packet_uint8(packet, rsa);
                 tls_packet_uint8(packet, sha1);
@@ -6230,6 +6248,7 @@ int _private_dtls_check_packet(struct TLSContext *context, const unsigned char *
 void _private_dtls_reset(struct TLSContext *context) {
     context->dtls_epoch_local = 0;
     context->dtls_epoch_remote = 0;
+    // context->local_sequence_number = 1;
     context->dtls_seq = 0;
     _private_tls_destroy_hash(context);
     context->connection_status = 0;
@@ -6737,6 +6756,7 @@ int tls_parse_hello(struct TLSContext *context, const unsigned char *buf, int bu
             if ((extension_type == 0x0E) && (context->dtls)) {
                 // use_srtp
                 DEBUG_DUMP_HEX_LABEL("USE SRTP", &buf[res], extension_len);
+                context->dtls = 4;
             }
 #ifdef WITH_TLS_13
             else
@@ -7553,14 +7573,28 @@ int tls_parse_verify(struct TLSContext *context, const unsigned char *buf, int b
     if ((context->version == TLS_V12) || (context->version == DTLS_V12) || (context->version == TLS_V13) || (context->version == DTLS_V13)) {
         unsigned int hash = buf[3];
         unsigned int algorithm = buf[4];
+#ifdef TLS_ECDSA_SUPPORTED
+        if ((algorithm != rsa) && (algorithm != ecdsa)) {
+            if (context->dtls == 4) {
+                DEBUG_PRINT("DTLS-SRTP mode, skipping signature check for unsupported signature\n");
+                context->client_verified = 1;
+                return 1;
+            }
+            return TLS_UNSUPPORTED_CERTIFICATE;
+        }
+#else
         if (algorithm != rsa)
             return TLS_UNSUPPORTED_CERTIFICATE;
+#endif
         unsigned short size = ntohs(*(unsigned short *)&buf[5]);
         CHECK_SIZE(size, bytes_to_follow - 4, TLS_BAD_CERTIFICATE)
         DEBUG_PRINT("ALGORITHM %i/%i (%i)\n", hash, algorithm, (int)size);
         DEBUG_DUMP_HEX_LABEL("VERIFY", &buf[7], bytes_to_follow - 7);
         
-        res = _private_tls_verify_rsa(context, hash, &buf[7], size, context->cached_handshake, context->cached_handshake_len);
+        if (algorithm == rsa)
+            res = _private_tls_verify_rsa(context, hash, &buf[7], size, context->cached_handshake, context->cached_handshake_len);
+        else
+            res = _private_tls_verify_ecdsa(context, hash, &buf[7], size, context->cached_handshake, context->cached_handshake_len, NULL);
     } else {
 #ifdef TLS_LEGACY_SUPPORT
         unsigned short size = ntohs(*(unsigned short *)&buf[3]);
@@ -7691,6 +7725,16 @@ int tls_parse_payload(struct TLSContext *context, const unsigned char *buf, int 
                 // server hello
             case 0x02:
                 DEBUG_PRINT(" => SERVER HELLO\n");
+                /* if (context->dtls) {
+                    // reset state
+                    memset(context->hs_messages, 0, sizeof(context->hs_messages));
+                    context->connection_status = 0;
+                    if (context->cached_handshake) {
+                        TLS_FREE(context->cached_handshake);
+                        context->cached_handshake = NULL;
+                        context->cached_handshake_len = 0;
+                    }
+                } */
                 CHECK_HANDSHAKE_STATE(context, 2, 1);
                 if (context->is_server)
                     payload_res = TLS_UNEXPECTED_MESSAGE;
@@ -8346,7 +8390,7 @@ int tls_parse_message(struct TLSContext *context, unsigned char *buf, int buf_le
     }
     if (context->dtls) {
         context->dtls_epoch_remote = dtls_epoch;
-        context->remote_sequence_number = dtls_sequence_number & 0xFFFFFFFFFFFF;
+        context->remote_sequence_number = dtls_sequence_number & 0xFFFFFFFFFFFFLL;
     } else
         context->remote_sequence_number ++;
 
@@ -10889,7 +10933,6 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
 
     int err;
     struct TLSContext *context = NULL;
-
     if (tls_is_stun(buf, buf_len)) {
         DEBUG_PRINT("RECEIVED STUN PACKET\n");
         unsigned char response_buffer[0x8000];
