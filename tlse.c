@@ -10985,7 +10985,6 @@ struct TLSRTCPeerConnection *tls_peerconnection_context(unsigned char active, tl
         channel->certificate_verify = certificate_verify;
         channel->active = active;
         channel->userdata = userdata;
-
     }
 
     return channel;
@@ -11157,9 +11156,9 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
             if (key_size > 0) {
                 DEBUG_DUMP_HEX_LABEL("SRTP KEY", key_buffer, key_size);
 
-                struct SRTPContext *srtp_context = srtp_init(SRTP_AES_CM, SRTP_AUTH_HMAC_SHA1);
-                srtp_key(srtp_context, key_buffer, 16, key_buffer + 16, 14, 32);
-                srtp_destroy(srtp_context);
+                // struct SRTPContext *srtp_context = srtp_init(SRTP_AES_CM, SRTP_AUTH_HMAC_SHA1);
+                // srtp_key(srtp_context, key_buffer, 16, key_buffer + 16, 14, 32);
+                // srtp_destroy(srtp_context);
             }
         }
 
