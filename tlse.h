@@ -156,6 +156,11 @@
 #define SRTP_AEAD_AES_128_GCM       0x0007
 #define SRTP_AEAD_AES_256_GCM       0x0008
 
+#define SRTP_NULL           0
+#define SRTP_AES_CM         1
+#define SRTP_AUTH_NULL      0
+#define SRTP_AUTH_HMAC_SHA1 1
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -441,11 +446,6 @@ int tls_remote_error(struct TLSContext *context);
 
 #ifdef TLS_SRTP
     struct SRTPContext;
-    #define SRTP_NULL           0
-    #define SRTP_AES_CM         1
-    #define SRTP_AUTH_NULL      0
-    #define SRTP_AUTH_HMAC_SHA1 1
-
     struct SRTPContext *srtp_init(unsigned char mode, unsigned char auth_mode);
     int srtp_key(struct SRTPContext *context, const void *key, int keylen, const void *salt, int saltlen, int tag_bits);
     int srtp_inline(struct SRTPContext *context, const char *b64, int tag_bits);
