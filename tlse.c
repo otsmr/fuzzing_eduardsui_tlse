@@ -11888,7 +11888,6 @@ void srtp_destroy(struct SRTPContext *context) {
         TLS_FREE(context);
     }
 }
-
 #endif // TLS_SRTP
 
 #endif // TLSE_C
