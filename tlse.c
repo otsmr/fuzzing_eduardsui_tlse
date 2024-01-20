@@ -1199,7 +1199,6 @@ struct DTLSFragment {
 struct TLSHandshakeList {
     unsigned char hint;
     unsigned char connection_status;
-    unsigned short dtls_seq;
     unsigned char *msg;
     unsigned int len;
     void *next;
@@ -4176,7 +4175,6 @@ void _private_tls_update_handshake_list(struct TLSContext *context, const unsign
     memcpy(msg->msg, in, len);
     msg->len = len;
     msg->hint = hint;
-    msg->dtls_seq = context->dtls_seq;
     msg->connection_status = connection_status ? connection_status : context->connection_status;
     msg->next = NULL;
 
@@ -5398,25 +5396,29 @@ struct TLSPacket *tls_build_server_key_exchange(struct TLSContext *context, int 
     int start_len = packet->len;
 #ifdef TLS_FORWARD_SECRECY
     if (method == KEA_dhe_rsa) {
-        tls_init();
-        _private_tls_dhe_create(context);
+
+        if ((context->dtls) && (!context->ecc_dhe)) {
+            tls_init();
+            _private_tls_dhe_create(context);
         
-        const char *default_dhe_p = context->default_dhe_p;
-        const char *default_dhe_g = context->default_dhe_g;
-        int key_size;
-        if ((!default_dhe_p) || (!default_dhe_g)) {
-            default_dhe_p = TLS_DH_DEFAULT_P;
-            default_dhe_g = TLS_DH_DEFAULT_G;
-            key_size = TLS_DHE_KEY_SIZE / 8;
-        } else {
-            key_size = strlen(default_dhe_p);
-        }
-        if (_private_tls_dh_make_key(key_size, context->dhe, default_dhe_p, default_dhe_g, 0, 0)) {
-            DEBUG_PRINT("ERROR CREATING DHE KEY\n");
-            TLS_FREE(packet);
-            TLS_FREE(context->dhe);
-            context->dhe = NULL;
-            return NULL;
+            const char *default_dhe_p = context->default_dhe_p;
+            const char *default_dhe_g = context->default_dhe_g;
+            int key_size;
+            if ((!default_dhe_p) || (!default_dhe_g)) {
+                default_dhe_p = TLS_DH_DEFAULT_P;
+                default_dhe_g = TLS_DH_DEFAULT_G;
+                key_size = TLS_DHE_KEY_SIZE / 8;
+            } else {
+                key_size = strlen(default_dhe_p);
+            }
+
+            if (_private_tls_dh_make_key(key_size, context->dhe, default_dhe_p, default_dhe_g, 0, 0)) {
+                DEBUG_PRINT("ERROR CREATING DHE KEY\n");
+                TLS_FREE(packet);
+                TLS_FREE(context->dhe);
+                context->dhe = NULL;
+                return NULL;
+            }
         }
         
         unsigned char dh_Ys[0xFFF];
@@ -5455,17 +5457,19 @@ struct TLSPacket *tls_build_server_key_exchange(struct TLSContext *context, int 
             context->curve = default_curve;
         tls_packet_uint8(packet, 3);
         tls_packet_uint16(packet, context->curve->iana);
-        tls_init();
-        _private_tls_ecc_dhe_create(context);
+        if ((context->dtls) && (!context->ecc_dhe)) {
+            tls_init();
+            _private_tls_ecc_dhe_create(context);
         
-        ltc_ecc_set_type *dp = (ltc_ecc_set_type *)&context->curve->dp;
+            ltc_ecc_set_type *dp = (ltc_ecc_set_type *)&context->curve->dp;
         
-        if (ecc_make_key_ex(NULL, find_prng("sprng"), context->ecc_dhe, dp)) {
-            TLS_FREE(context->ecc_dhe);
-            context->ecc_dhe = NULL;
-            DEBUG_PRINT("Error generating ECC key\n");
-            TLS_FREE(packet);
-            return NULL;
+            if (ecc_make_key_ex(NULL, find_prng("sprng"), context->ecc_dhe, dp)) {
+                TLS_FREE(context->ecc_dhe);
+                context->ecc_dhe = NULL;
+                DEBUG_PRINT("Error generating ECC key\n");
+                TLS_FREE(packet);
+                return NULL;
+            }
         }
         unsigned char out[TLS_MAX_RSA_KEY];
         unsigned long out_len = TLS_MAX_RSA_KEY;
@@ -5577,10 +5581,13 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
     } else
     if ((!context->is_server) || ((context->version != TLS_V13) && (context->version != DTLS_V13)))
 #endif
-    if (!tls_random(context->local_random, context->is_server ? TLS_SERVER_RANDOM_SIZE : TLS_CLIENT_RANDOM_SIZE))
-        return NULL;
-    if (!context->is_server)
-        *(unsigned int *)context->local_random = htonl((unsigned int)time(NULL));
+    if (context->dtls < 3) {
+        if (!tls_random(context->local_random, context->is_server ? TLS_SERVER_RANDOM_SIZE : TLS_CLIENT_RANDOM_SIZE))
+            return NULL;
+        if (!context->is_server)
+            *(unsigned int *)context->local_random = htonl((unsigned int)time(NULL));
+        context->dtls = 3;
+    }
 
     if ((context->is_server) && (tls13_downgrade)) {
         if ((tls13_downgrade == TLS_V12) || (tls13_downgrade == DTLS_V12))
@@ -5621,7 +5628,8 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
         // session size
         tls_packet_uint8(packet, 0);
 #else
-        _private_tls_set_session_id(context);
+        if ((!context->dtls) || (!context->session_size))
+            _private_tls_set_session_id(context);
         // session size
         tls_packet_uint8(packet, context->session_size);
         if (context->session_size)
@@ -6621,6 +6629,7 @@ int tls_parse_hello(struct TLSContext *context, const unsigned char *buf, int bu
         context->session_size = session_len;
         DEBUG_DUMP_HEX_LABEL("REMOTE SESSION ID: ", context->session, context->session_size);
     } else
+    if (!context->dtls)
         context->session_size = 0;
     res += session_len;
 
@@ -6638,18 +6647,18 @@ int tls_parse_hello(struct TLSContext *context, const unsigned char *buf, int bu
 
                 if ((context->dtls_cookie_len != tls_cookie_len) || (!context->dtls_cookie)) {
                     *dtls_verified = 2;
-                    _private_dtls_reset_cookie(context);
+                    // _private_dtls_reset_cookie(context);
                     DEBUG_PRINT("INVALID DTLS COOKIE\n");
                     return TLS_BROKEN_PACKET;
                 }
                 if (memcmp(context->dtls_cookie, &buf[res], tls_cookie_len)) {
                     *dtls_verified = 3;
-                    _private_dtls_reset_cookie(context);
+                    // _private_dtls_reset_cookie(context);
                     DEBUG_PRINT("MISMATCH DTLS COOKIE\n");
                     return TLS_BROKEN_PACKET;
                 }
-                _private_dtls_reset_cookie(context);
-                context->dtls_seq++;
+                // _private_dtls_reset_cookie(context);
+                context->dtls_seq ++;
                 *dtls_verified = 1;
                 res += tls_cookie_len;
             } else {
@@ -7875,10 +7884,12 @@ int tls_parse_payload(struct TLSContext *context, const unsigned char *buf, int 
                 if (context->is_server) {
                     payload_res = tls_parse_hello(context, buf + 1, payload_size, &write_packets, &dtls_cookie_verified);
                     DEBUG_PRINT(" => DTLS COOKIE VERIFIED: %i (%i)\n", dtls_cookie_verified, payload_res);
-                    if ((context->dtls) && (payload_res > 0) && (!dtls_cookie_verified) && (context->connection_status == 1)) {
+                    if ((context->dtls) && (payload_res > 0) && (!dtls_cookie_verified)) {
                         // wait client hello
                         context->connection_status = 3;
                         update_hash = 0;
+                    } else {
+                        Sleep(1000);
                     }
                 } else
                     payload_res = TLS_UNEXPECTED_MESSAGE;
