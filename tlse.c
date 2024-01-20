@@ -194,7 +194,7 @@
 #define VERSION_SUPPORTED(version, err)  if ((version != TLS_V13) && (version != TLS_V12) && (version != TLS_V11) && (version != TLS_V10) && (version != DTLS_V13) && (version != DTLS_V12) && (version != DTLS_V10)) { if ((version == SSL_V30) && (context->connection_status == 0)) { version = TLS_V12; } else { DEBUG_PRINT("UNSUPPORTED TLS VERSION %x\n", (int)version); return err;} }
 #define CHECK_SIZE(size, buf_size, err)  if (((int)(size) > (int)(buf_size)) || ((int)(buf_size) < 0)) { DEBUG_PRINT("[EXPECTED AT LEAST %i IN BUFFER OF SIZE %i]\n", (int)(size), (int)(buf_size)); return err; }
 #define TLS_IMPORT_CHECK_SIZE(buf_pos, size, buf_size) if (((int)size > (int)buf_size - buf_pos) || ((int)buf_pos > (int)buf_size)) { DEBUG_PRINT("IMPORT ELEMENT SIZE ERROR\n"); tls_destroy_context(context); return NULL; }
-#define CHECK_HANDSHAKE_STATE(context, n, limit)  { if (context->hs_messages[n] >= limit) { if (context->dtls) { DEBUG_PRINT("* REPEATED MESSAGE, RE-HASHING\n"); _private_dtls_rehash(context, type + 4); context->hs_messages[n]++;} else { DEBUG_PRINT("* UNEXPECTED MESSAGE (%i)\n", (int)n); payload_res = TLS_UNEXPECTED_MESSAGE; break; } } context->hs_messages[n]++; }
+#define CHECK_HANDSHAKE_STATE(context, n, limit)  { if (context->hs_messages[n] >= limit) { if (context->dtls) { DEBUG_PRINT("* REPEATED MESSAGE, RE-HASHING\n"); _private_dtls_rehash(context, type); context->hs_messages[n]++;} else { DEBUG_PRINT("* UNEXPECTED MESSAGE (%i)\n", (int)n); payload_res = TLS_UNEXPECTED_MESSAGE; break; } } context->hs_messages[n]++; }
 #define TLS_24_BIT(buf, index, val) { unsigned int u_val = (unsigned int)val; buf[index] =  u_val / 0x10000; u_val %= 0x10000; buf[index + 1] =  u_val / 0x100; u_val %= 0x100; buf[index + 2] = u_val; }
 
 #if CRYPT > 0x0118
@@ -1197,11 +1197,20 @@ struct DTLSFragment {
 };
 
 struct TLSHandshakeList {
-    unsigned char hint;
     unsigned char connection_status;
+    unsigned char direction;
     unsigned char *msg;
     unsigned int len;
     void *next;
+};
+
+struct DTLSData {
+    struct TLSHandshakeList *dtls_handshake_list;
+    struct DTLSFragment *fragment;
+    unsigned char *key_exchange;
+    unsigned int key_exchange_len;
+
+    unsigned char has_random;
 };
 
 struct TLSContext {
@@ -1266,7 +1275,7 @@ struct TLSContext {
     unsigned char client_verified;
     // handshake messages flags
     unsigned char hs_messages[11];
-    struct TLSHandshakeList *dtls_handshake_list;
+
     void *user_data;
     struct TLSCertificate **root_certificates;
     unsigned int root_count;
@@ -1291,7 +1300,7 @@ struct TLSContext {
     unsigned char false_start;
 #endif
 
-    struct DTLSFragment *fragment;
+    struct DTLSData *dtls_data;
 };
 
 struct TLSPacket {
@@ -1302,8 +1311,8 @@ struct TLSPacket {
     struct TLSContext *context;
 };
 
-#define SRTP_MASTER_KEY_LEN         30
-#define SRTP_MASTER_KEY_KEY_LEN     16
+#define SRTP_MASTER_KEY_LEN             30
+#define SRTP_MASTER_KEY_KEY_LEN         16
 #define SRTP_MASTER_KEY_SALT_LEN        14
 
 struct TLSRTCPeerConnection {
@@ -1387,7 +1396,7 @@ static const unsigned char TLS_EC_secp384r1_OID[] = {0x2B, 0x81, 0x04, 0x00, 0x2
 static const unsigned char TLS_EC_secp521r1_OID[] = {0x2B, 0x81, 0x04, 0x00, 0x23, 0x00};
 
 struct TLSCertificate *asn1_parse(struct TLSContext *context, const unsigned char *buffer, unsigned int size, int client_cert);
-int _private_tls_update_hash(struct TLSContext *context, const unsigned char *in, unsigned int len, unsigned char hint, unsigned char connection_status);
+int _private_tls_update_hash(struct TLSContext *context, const unsigned char *in, unsigned int len, unsigned char direction, unsigned char connection_status);
 struct TLSPacket *tls_build_finished(struct TLSContext *context);
 unsigned int _private_tls_hmac_message(unsigned char local, struct TLSContext *context, const unsigned char *buf, int buf_len, const unsigned char *buf2, int buf_len2, unsigned char *out, unsigned int outlen, uint64_t remote_sequence_number);
 int tls_random(unsigned char *key, int len);
@@ -3825,7 +3834,7 @@ void tls_packet_update(struct TLSPacket *packet) {
                 if ((packet->buf[0] == TLS_HANDSHAKE) && (packet->len > header_size)) {
                     unsigned char handshake_type = packet->buf[header_size];
                     if ((handshake_type != 0x00) && (handshake_type != 0x03))
-                        _private_tls_update_hash(packet->context, packet->buf + header_size, packet->len - header_size - footer_size, 0, 0);
+                        _private_tls_update_hash(packet->context, packet->buf + header_size, packet->len - header_size - footer_size, 1, 0);
                 }
 #ifdef TLS_12_FALSE_START
                 if (((packet->context->cipher_spec_set) || (packet->context->false_start)) && (packet->context->crypto.created)) {
@@ -4128,7 +4137,6 @@ void _private_tls_destroy_hash(struct TLSContext *context) {
 void _private_tls_create_hash(struct TLSContext *context) {
     if (!context)
         return;
-    
     TLSHash *hash = _private_tls_ensure_hash(context);
     if ((context->version == TLS_V12) || (context->version == DTLS_V12) || (context->version == TLS_V13) || (context->version == DTLS_V13)) {
         int hash_size = _private_tls_mac_length(context);
@@ -4155,7 +4163,7 @@ void _private_tls_create_hash(struct TLSContext *context) {
     }
 }
 
-void _private_tls_update_handshake_list(struct TLSContext *context, const unsigned char *in, unsigned int len, unsigned char hint, unsigned char connection_status) {
+void _private_tls_update_handshake_list(struct TLSContext *context, const unsigned char *in, unsigned int len, unsigned char direction, unsigned char connection_status) {
     if ((!context) || (!context->dtls) || (!in) || (!len))
         return;
 
@@ -4169,33 +4177,30 @@ void _private_tls_update_handshake_list(struct TLSContext *context, const unsign
         return;
     }
 
-    if (!hint)
-        hint = 0x24 + in[0];
-
     memcpy(msg->msg, in, len);
     msg->len = len;
-    msg->hint = hint;
+    msg->direction = direction;
     msg->connection_status = connection_status ? connection_status : context->connection_status;
     msg->next = NULL;
 
-    if (!context->dtls_handshake_list) {
-        context->dtls_handshake_list = msg;
+    if (!context->dtls_data->dtls_handshake_list) {
+        context->dtls_data->dtls_handshake_list = msg;
         return;
     }
 
-    struct TLSHandshakeList *last = context->dtls_handshake_list;
+    struct TLSHandshakeList *last = context->dtls_data->dtls_handshake_list;
     while (last->next)
         last = (struct TLSHandshakeList *)last->next;
 
     last->next = msg;
 }
 
-int _private_tls_update_hash(struct TLSContext *context, const unsigned char *in, unsigned int len, unsigned char hint, unsigned char connection_status) {
+int _private_tls_update_hash(struct TLSContext *context, const unsigned char *in, unsigned int len, unsigned char direction, unsigned char connection_status) {
     if (!context)
         return 0;
 
     if (context->dtls)
-        _private_tls_update_handshake_list(context, in, len, hint, connection_status);
+        _private_tls_update_handshake_list(context, in, len, direction, connection_status);
 
     TLSHash *hash = _private_tls_ensure_hash(context);
     if ((context->version == TLS_V12) || (context->version == DTLS_V12) || (context->version == TLS_V13) || (context->version == DTLS_V13)) {
@@ -4524,8 +4529,15 @@ struct TLSContext *tls_create_context(unsigned char is_server, unsigned short ve
     if (context) {
         memset(context, 0, sizeof(struct TLSContext));
         context->is_server = is_server;
-        if ((version == DTLS_V13) || (version == DTLS_V12) || (version == DTLS_V10))
+        if ((version == DTLS_V13) || (version == DTLS_V12) || (version == DTLS_V10)) {
             context->dtls = 1;
+            context->dtls_data = (struct DTLSData *)TLS_MALLOC(sizeof(struct DTLSData));
+            if (!context->dtls_data) {
+                TLS_FREE(context);
+                return NULL;
+            }
+            memset(context->dtls_data, 0, sizeof(struct DTLSData));
+        }
         context->version = version;
     }
     return context;
@@ -4551,6 +4563,14 @@ struct TLSContext *tls_accept(struct TLSContext *context) {
         child->is_server = 1;
         child->is_child = 1;
         child->dtls = context->dtls;
+        if (context->dtls) {
+            child->dtls_data = (struct DTLSData *)TLS_MALLOC(sizeof(struct DTLSData));
+            if (!child->dtls_data) {
+                TLS_FREE(child);
+                return NULL;
+            }
+            memset(child->dtls_data, 0, sizeof(struct DTLSData));
+        }
         child->version = context->version;
         child->certificates = context->certificates;
         child->certificates_count = context->certificates_count;
@@ -4751,17 +4771,23 @@ void tls_destroy_context(struct TLSContext *context) {
     TLS_FREE(context->client_secret);
 #endif
     // DTLS-related buffer
-    if (context->fragment) {
-        TLS_FREE(context->fragment->buffer);
-        TLS_FREE(context->fragment);
-    }
-    while (context->dtls_handshake_list) {
-        struct TLSHandshakeList *next = (struct TLSHandshakeList *)context->dtls_handshake_list->next;
-        if (context->dtls_handshake_list->msg) {
-            TLS_FREE(context->dtls_handshake_list->msg);
+    if (context->dtls_data) {
+        if (context->dtls_data->fragment) {
+            TLS_FREE(context->dtls_data->fragment->buffer);
+            TLS_FREE(context->dtls_data->fragment);
         }
-        TLS_FREE(context->dtls_handshake_list);
-        context->dtls_handshake_list = next;
+        while (context->dtls_data->dtls_handshake_list) {
+            struct TLSHandshakeList *next = (struct TLSHandshakeList *)context->dtls_data->dtls_handshake_list->next;
+            if (context->dtls_data->dtls_handshake_list->msg) {
+                TLS_FREE(context->dtls_data->dtls_handshake_list->msg);
+            }
+            TLS_FREE(context->dtls_data->dtls_handshake_list);
+            context->dtls_data->dtls_handshake_list = next;
+        }
+        if (context->dtls_data->key_exchange) {
+            TLS_FREE(context->dtls_data->key_exchange);
+        }
+        TLS_FREE(context->dtls_data);
     }
     TLS_FREE(context);
 }
@@ -5388,6 +5414,13 @@ struct TLSPacket *tls_build_server_key_exchange(struct TLSContext *context, int 
     }
     
     struct TLSPacket *packet = tls_create_packet(context, TLS_HANDSHAKE, context->version, 0);
+    if ((context->dtls) && (context->dtls_data->key_exchange) && (context->dtls_data->key_exchange_len > packet->len)) {
+        tls_packet_append(packet, context->dtls_data->key_exchange, context->dtls_data->key_exchange_len);
+        tls_packet_update(packet);
+        context->dtls_seq ++;
+        return packet;
+    }
+    int packet_offset = packet->len;
     tls_packet_uint8(packet, 0x0C);
     unsigned char dummy[3];
     tls_packet_append(packet, dummy, 3);
@@ -5554,6 +5587,16 @@ struct TLSPacket *tls_build_server_key_exchange(struct TLSContext *context, int 
         }
     }
     tls_packet_update(packet);
+    if (context->dtls_data) {
+        if (context->dtls_data->key_exchange) {
+            TLS_FREE(context->dtls_data->key_exchange);
+        }
+        context->dtls_data->key_exchange = (unsigned char *)TLS_MALLOC(packet->len - packet_offset);
+        if (context->dtls_data->key_exchange) {
+            context->dtls_data->key_exchange_len = packet->len - packet_offset;
+            memcpy(context->dtls_data->key_exchange, packet->buf + packet_offset, context->dtls_data->key_exchange_len);
+        }
+    }
     return packet;
 }
 
@@ -5576,17 +5619,19 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
         unsigned char hash[TLS_MAX_SHA_SIZE ];
         int hash_len = _private_tls_done_hash(context, hash);
         header[3] = (unsigned char)hash_len;
-        _private_tls_update_hash(context, header, sizeof(header), 0, 0);
-        _private_tls_update_hash(context, hash, hash_len, 0, 0);
+        _private_tls_update_hash(context, header, sizeof(header), 1, 0);
+        _private_tls_update_hash(context, hash, hash_len, 1, 0);
     } else
     if ((!context->is_server) || ((context->version != TLS_V13) && (context->version != DTLS_V13)))
 #endif
-    if (context->dtls < 3) {
+    if ((!context->dtls) || (!context->dtls_data->has_random)) {
         if (!tls_random(context->local_random, context->is_server ? TLS_SERVER_RANDOM_SIZE : TLS_CLIENT_RANDOM_SIZE))
             return NULL;
-        if (!context->is_server)
-            *(unsigned int *)context->local_random = htonl((unsigned int)time(NULL));
-        context->dtls = 3;
+        // if (!context->is_server)
+        *(unsigned int *)context->local_random = htonl((unsigned int)time(NULL));
+
+        if (context->dtls)
+            context->dtls_data->has_random = 1;
     }
 
     if ((context->is_server) && (tls13_downgrade)) {
@@ -6304,7 +6349,7 @@ int _private_dtls_check_packet(struct TLSContext *context, const unsigned char *
     unsigned int fragment_length = buf[8] * 0x10000 + buf[9] * 0x100 + buf[10];
 
     if ((fragment_offset) || (fragment_length != bytes_to_follow)) {
-        if ((context->fragment) && (context->fragment->written == bytes_to_follow))
+        if ((context->dtls_data->fragment) && (context->dtls_data->fragment->written == bytes_to_follow))
             return bytes_to_follow;
 
         return TLS_FEATURE_NOT_SUPPORTED;
@@ -7714,28 +7759,28 @@ void _private_dtls_reset_handshake(struct TLSContext *context) {
             }
         }
 
-        while (context->dtls_handshake_list) {
-            struct TLSHandshakeList *next = (struct TLSHandshakeList *)context->dtls_handshake_list->next;
-            if (context->dtls_handshake_list->msg) {
-                TLS_FREE(context->dtls_handshake_list->msg);
+        while (context->dtls_data->dtls_handshake_list) {
+            struct TLSHandshakeList *next = (struct TLSHandshakeList *)context->dtls_data->dtls_handshake_list->next;
+            if (context->dtls_data->dtls_handshake_list->msg) {
+                TLS_FREE(context->dtls_data->dtls_handshake_list->msg);
             }
-            TLS_FREE(context->dtls_handshake_list);
-            context->dtls_handshake_list = next;
+            TLS_FREE(context->dtls_data->dtls_handshake_list);
+            context->dtls_data->dtls_handshake_list = next;
         }
-        context->dtls_handshake_list = NULL;
+        context->dtls_data->dtls_handshake_list = NULL;
     }
 }
 
 void _private_dtls_rehash(struct TLSContext *context, unsigned char msg_type) {
     if ((context) && (context->dtls) && (msg_type)) {
         // create a new list, delete old one
-        struct TLSHandshakeList *handshake_list = context->dtls_handshake_list;
+        struct TLSHandshakeList *handshake_list = context->dtls_data->dtls_handshake_list;
 
         int found = 0;
         while (handshake_list) {
             struct TLSHandshakeList *next = handshake_list->next;
 
-            if (handshake_list->hint == msg_type) {
+            if ((handshake_list->direction == 0) && (handshake_list->msg[0] == msg_type)) {
                 found = 1;
                 context->connection_status = handshake_list->connection_status;
                 break;
@@ -7749,10 +7794,10 @@ void _private_dtls_rehash(struct TLSContext *context, unsigned char msg_type) {
             return;
         }
 
-        handshake_list = context->dtls_handshake_list;
+        handshake_list = context->dtls_data->dtls_handshake_list;
 
         struct TLSHandshakeList *to_delete = handshake_list;
-        context->dtls_handshake_list = NULL;
+        context->dtls_data->dtls_handshake_list = NULL;
 
         _private_tls_done_hash(context, NULL);
 
@@ -7760,13 +7805,13 @@ void _private_dtls_rehash(struct TLSContext *context, unsigned char msg_type) {
             struct TLSHandshakeList *next = handshake_list->next;
 
 
-            if (handshake_list->hint >= 0x24)
+            if (handshake_list->direction)
                 context->connection_status = handshake_list->connection_status;
 
-            if (handshake_list->hint == msg_type)
+            if ((handshake_list->direction == 0) && (handshake_list->msg[0] == msg_type))
                 break;
 
-            _private_tls_update_hash(context, handshake_list->msg, handshake_list->len, handshake_list->hint, handshake_list->connection_status);
+            _private_tls_update_hash(context, handshake_list->msg, handshake_list->len, handshake_list->direction, handshake_list->connection_status);
             handshake_list = next;
         }
 
@@ -7787,6 +7832,8 @@ int tls_parse_payload(struct TLSContext *context, const unsigned char *buf, int 
     if (context->connection_status == 0xFF) {
 #ifndef TLS_ACCEPT_SECURE_RENEGOTIATION
         // renegotiation disabled (emit warning alert)
+        if (context->dtls)
+            return orig_len;
         _private_tls_write_packet(tls_build_alert(context, 0, no_renegotiation));
         return 1;
 #endif
@@ -7804,12 +7851,12 @@ int tls_parse_payload(struct TLSContext *context, const unsigned char *buf, int 
         unsigned int payload_size = buf[1] * 0x10000 + buf[2] * 0x100 + buf[3] + 3;
         if (context->dtls) {
             payload_size += 8;
-            if (context->fragment) {
-                CHECK_SIZE(payload_size - 11, context->fragment->written, TLS_NEED_MORE_DATA)
+            if (context->dtls_data->fragment) {
+                CHECK_SIZE(payload_size - 11, context->dtls_data->fragment->written, TLS_NEED_MORE_DATA)
 
                 local_buffer[0] = type;
 
-                TLS_24_BIT(local_buffer, 1, context->fragment->written);
+                TLS_24_BIT(local_buffer, 1, context->dtls_data->fragment->written);
 
                 local_buffer[4] = buf[4];
                 local_buffer[5] = buf[5];
@@ -7818,16 +7865,16 @@ int tls_parse_payload(struct TLSContext *context, const unsigned char *buf, int 
                 local_buffer[7] = 0;
                 local_buffer[8] = 0;
 
-                TLS_24_BIT(local_buffer, 9, context->fragment->written);
+                TLS_24_BIT(local_buffer, 9, context->dtls_data->fragment->written);
 
-                memcpy(local_buffer + 12, context->fragment->buffer, context->fragment->written);
+                memcpy(local_buffer + 12, context->dtls_data->fragment->buffer, context->dtls_data->fragment->written);
 
                 buf = local_buffer;
-                buf_len = context->fragment->written + 12;
+                buf_len = context->dtls_data->fragment->written + 12;
 
-                TLS_FREE(context->fragment->buffer);
-                TLS_FREE(context->fragment);
-                context->fragment = 0;
+                TLS_FREE(context->dtls_data->fragment->buffer);
+                TLS_FREE(context->dtls_data->fragment);
+                context->dtls_data->fragment = 0;
             } else {
                 CHECK_SIZE(payload_size + 1, buf_len, TLS_NEED_MORE_DATA)
             }
@@ -7888,8 +7935,6 @@ int tls_parse_payload(struct TLSContext *context, const unsigned char *buf, int 
                         // wait client hello
                         context->connection_status = 3;
                         update_hash = 0;
-                    } else {
-                        Sleep(1000);
                     }
                 } else
                     payload_res = TLS_UNEXPECTED_MESSAGE;
@@ -8019,7 +8064,7 @@ int tls_parse_payload(struct TLSContext *context, const unsigned char *buf, int 
                 if ((!context->is_server) && ((context->version == TLS_V13) || (context->version == DTLS_V13))) {
                     update_hash = 0;
                     DEBUG_PRINT("<= SENDING FINISHED\n");
-                    _private_tls_update_hash(context, buf, payload_size + 1, type + 0x04, 0xFF);
+                    _private_tls_update_hash(context, buf, payload_size + 1, 0, 0xFF);
                     _private_tls_write_packet(tls_build_finished(context));
                     _private_tls13_key(context, 0);
                     context->connection_status = 0xFF;
@@ -8038,7 +8083,7 @@ int tls_parse_payload(struct TLSContext *context, const unsigned char *buf, int 
                 return TLS_NOT_UNDERSTOOD;
         }
         if ((type != 0x00) && (update_hash) && (payload_res != TLS_UNEXPECTED_MESSAGE))
-            _private_tls_update_hash(context, buf, payload_size + 1, type + 0x04, 0);
+            _private_tls_update_hash(context, buf, payload_size + 1, 0, 0);
         
         if (certificate_verify_alert != no_error) {
             _private_tls_write_packet(tls_build_alert(context, 1, certificate_verify_alert));
@@ -8600,8 +8645,8 @@ int tls_parse_message(struct TLSContext *context, unsigned char *buf, int buf_le
             break;
             // change cipher spec
         case TLS_CHANGE_CIPHER:
-            context->dtls_epoch_remote++;
-            if (context->connection_status != 2) {
+            context->dtls_epoch_remote ++;
+            if ((context->connection_status != 2) && (!context->dtls)) {
 #ifdef WITH_TLS_13
                 if (context->connection_status == 4) {
                     DEBUG_PRINT("IGNORING CHANGE CIPHER SPEC MESSAGE (HELLO RETRY REQUEST)\n");
@@ -9858,27 +9903,27 @@ int tls_consume_stream(struct TLSContext *context, const unsigned char *buf, int
 
                 if (data_length != fragment_length) {
                     // fragmented!
-                    if (!context->fragment) {
-                        context->fragment = (struct DTLSFragment *)TLS_MALLOC(sizeof(struct DTLSFragment));
-                        if (context->fragment)
-                            memset(context->fragment, 0, sizeof(struct DTLSFragment));
+                    if (!context->dtls_data->fragment) {
+                        context->dtls_data->fragment = (struct DTLSFragment *)TLS_MALLOC(sizeof(struct DTLSFragment));
+                        if (context->dtls_data->fragment)
+                            memset(context->dtls_data->fragment, 0, sizeof(struct DTLSFragment));
                     }
 
-                    if (!context->fragment)
+                    if (!context->dtls_data->fragment)
                         return TLS_NO_MEMORY;
 
-                    char *fragment_buffer = context->fragment->buffer;
+                    char *fragment_buffer = context->dtls_data->fragment->buffer;
 
                     fragment_buffer = (char *)TLS_REALLOC(fragment_buffer, data_length * sizeof(char *));
                     if (!fragment_buffer)
                         return TLS_NO_MEMORY;
 
                     memcpy(fragment_buffer + fragment_offset, &buffer[12], fragment_length);
-                    context->fragment->buffer = fragment_buffer;
-                    context->fragment->len = data_length;
-                    context->fragment->written += fragment_length;
+                    context->dtls_data->fragment->buffer = fragment_buffer;
+                    context->dtls_data->fragment->len = data_length;
+                    context->dtls_data->fragment->written += fragment_length;
 
-                    if (context->fragment->written != context->fragment->len) {
+                    if (context->dtls_data->fragment->written != context->dtls_data->fragment->len) {
                         consumed = length;
                         parse_message = 0;
                     }
