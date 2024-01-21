@@ -5540,7 +5540,7 @@ struct TLSPacket *tls_build_server_key_exchange(struct TLSContext *context, int 
             
 #ifdef TLS_ECDSA_SUPPORTED
             if (tls_is_ecdsa(context)) {
-                if ((context->version == TLS_V13) || (context->version == DTLS_V13) || (context->version == TLS_V12) || (context->version == DTLS_V12))
+                if ((context->version == TLS_V13) || (context->version == DTLS_V13) || (context->version == TLS_V12))
                     hash_algorithm = sha512;
                 tls_packet_uint8(packet, hash_algorithm);
                 tls_packet_uint8(packet, ecdsa);
@@ -5778,27 +5778,23 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
                         // use_srtp
                         extension_len += 9;
                     }
-                    if (context->dtls) {
-                        if (extension_len)
-                            tls_packet_uint16(packet, extension_len);
-                    } else {
-                        tls_packet_uint16(packet, 5 + extension_len);
-                        // secure renegotation
-                        // advertise it, but refuse renegotiation
-                        tls_packet_uint16(packet, 0xff01);
+
+                    tls_packet_uint16(packet, 5 + extension_len);
+                    // secure renegotation
+                    // advertise it, but refuse renegotiation
+                    tls_packet_uint16(packet, 0xff01);
 #ifdef TLS_ACCEPT_SECURE_RENEGOTIATION
-                        // a little defensive
-                        if ((context->verify_len) && (!context->verify_data))
-                            context->verify_len = 0;
-                        tls_packet_uint16(packet, context->verify_len + 1);
-                        tls_packet_uint8(packet, context->verify_len);
-                        if (context->verify_len)
-                            tls_packet_append(packet, (unsigned char *)context->verify_data, context->verify_len);
+                    // a little defensive
+                    if ((context->verify_len) && (!context->verify_data))
+                        context->verify_len = 0;
+                    tls_packet_uint16(packet, context->verify_len + 1);
+                    tls_packet_uint8(packet, context->verify_len);
+                    if (context->verify_len)
+                        tls_packet_append(packet, (unsigned char *)context->verify_data, context->verify_len);
 #else
-                        tls_packet_uint16(packet, 1);
-                        tls_packet_uint8(packet, 0);
+                    tls_packet_uint16(packet, 1);
+                    tls_packet_uint8(packet, 0);
 #endif
-                    }
                 }
                 if (alpn_len) {
                     tls_packet_uint16(packet, 0x10);
@@ -7689,7 +7685,7 @@ int tls_parse_verify(struct TLSContext *context, const unsigned char *buf, int b
 #ifdef TLS_ECDSA_SUPPORTED
         if ((algorithm != rsa) && (algorithm != ecdsa)) {
             if (context->dtls == 4) {
-                DEBUG_PRINT("DTLS-SRTP mode, skipping signature check for unsupported signature\n");
+                DEBUG_PRINT("DTLS-SRTP mode, skipping signature check for unsupported signature (%x/%x)\n", algorithm, hash);
                 context->client_verified = 1;
                 return 1;
             }
@@ -11117,6 +11113,7 @@ int tls_peerconnection_load_keys(struct TLSRTCPeerConnection *channel, const uns
     if (!channel->context) {
         channel->context = tls_create_context(!channel->active, DTLS_V12);
         tls_srtp_set(channel->context);
+        tls_add_alpn(channel->context, "webrtc");
 
         if (channel->context->is_server)
             channel->context->request_client_certificate = 1;
@@ -11888,6 +11885,7 @@ void srtp_destroy(struct SRTPContext *context) {
         TLS_FREE(context);
     }
 }
+
 #endif // TLS_SRTP
 
 #endif // TLSE_C
