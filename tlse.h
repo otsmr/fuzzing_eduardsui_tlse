@@ -371,7 +371,7 @@ void *tls_peerconnection_userdata(struct TLSRTCPeerConnection *channel);
 int tls_peerconnection_load_keys(struct TLSRTCPeerConnection *channel, const unsigned char *pem_pub_key, int pem_pub_key_size, const unsigned char *pem_priv_key, int pem_priv_key_size);
 int tls_peerconnection_connect(struct TLSRTCPeerConnection *channel, tls_peerconnection_write_function write_function);
 int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned char *buf, int buf_len, unsigned char *addr, int port, unsigned char is_ipv6, tls_peerconnection_write_function write_function);
-void tls_destroy_datachannel(struct TLSRTCPeerConnection *channel);
+void tls_destroy_peerconnection(struct TLSRTCPeerConnection *channel);
 
 int tls_cert_fingerprint(const char *pem_data, int len, char *buffer, unsigned int buf_len);
 int tls_load_root_certificates(struct TLSContext *context, const unsigned char *pem_buffer, int pem_size);
