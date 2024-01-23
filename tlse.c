@@ -1209,14 +1209,9 @@ struct DTLSData {
     struct DTLSFragment *fragment;
     unsigned char *key_exchange;
     unsigned int key_exchange_len;
-
-#ifdef TLS_SRTP
-    struct SRTPContext *srtp;
-#endif
 #ifdef TLS_DTLS_EXTENDED_MASTER_SECRET
     unsigned char extended_master_secret;
 #endif
-
     unsigned char has_random;
 };
 
@@ -1341,6 +1336,12 @@ struct TLSRTCPeerConnection {
     unsigned char remote_state;
 
     unsigned char active;
+
+#ifdef TLS_SRTP
+    struct SRTPContext *srtp_local;
+    struct SRTPContext *srtp_remote;
+#endif
+
 };
 
 #ifdef SSL_COMPATIBLE_INTERFACE
@@ -4188,7 +4189,7 @@ void _private_tls_update_handshake_list(struct TLSContext *context, const unsign
     if ((!context) || (!context->dtls) || (!in) || (!len))
         return;
 
-    struct TLSHandshakeList *msg = TLS_MALLOC(sizeof(struct TLSHandshakeList));
+    struct TLSHandshakeList *msg = (struct TLSHandshakeList *)TLS_MALLOC(sizeof(struct TLSHandshakeList));
     if (!msg)
         return;
 
@@ -4793,11 +4794,6 @@ void tls_destroy_context(struct TLSContext *context) {
 #endif
     // DTLS-related buffer
     if (context->dtls_data) {
-#ifdef TLS_SRTP
-        if (context->dtls_data->srtp)
-            srtp_destroy(context->dtls_data->srtp);
-#endif
-
         if (context->dtls_data->fragment) {
             TLS_FREE(context->dtls_data->fragment->buffer);
             TLS_FREE(context->dtls_data->fragment);
@@ -7823,7 +7819,7 @@ void _private_dtls_rehash(struct TLSContext *context, unsigned char msg_type) {
 
         int found = 0;
         while (handshake_list) {
-            struct TLSHandshakeList *next = handshake_list->next;
+            struct TLSHandshakeList *next = (struct TLSHandshakeList *)handshake_list->next;
 
             if ((handshake_list->direction == 0) && (handshake_list->msg[0] == msg_type)) {
                 found = 1;
@@ -7847,7 +7843,7 @@ void _private_dtls_rehash(struct TLSContext *context, unsigned char msg_type) {
         _private_tls_done_hash(context, NULL);
 
         while (handshake_list) {
-            struct TLSHandshakeList *next = handshake_list->next;
+            struct TLSHandshakeList *next = (struct TLSHandshakeList *)handshake_list->next;
 
 
             if (handshake_list->direction)
@@ -7862,7 +7858,7 @@ void _private_dtls_rehash(struct TLSContext *context, unsigned char msg_type) {
 
         handshake_list = to_delete;
         while (handshake_list) {
-                struct TLSHandshakeList *next = handshake_list->next;
+                struct TLSHandshakeList *next = (struct TLSHandshakeList *)handshake_list->next;
                 if (handshake_list->msg) {
                     TLS_FREE(handshake_list->msg);
                 }
@@ -7884,7 +7880,7 @@ int tls_parse_payload(struct TLSContext *context, const unsigned char *buf, int 
 #endif
     }
 
-    char local_buffer[DTLS_MAX_FRAGMENT_SIZE + 12];
+    unsigned char local_buffer[DTLS_MAX_FRAGMENT_SIZE + 12];
     while ((buf_len >= 4) && (!context->critical_error)) {
         int payload_res = 0;
         unsigned char update_hash = 1;
@@ -10494,7 +10490,7 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
     const unsigned char *magic_cookie = &msg[4];
     const unsigned char *transaction_id = &msg[8];
 
-    const char *attributes = &msg[20];
+    const unsigned char *attributes = &msg[20];
 
     switch (type) {
         case 0x0001:
@@ -10524,13 +10520,13 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
 
     char key[0x4CE];
 
-    unsigned char *username = (void *)0;
+    unsigned char *username = NULL;
     int username_len = 0;
 
-    unsigned char *realm = (void *)0;
+    unsigned char *realm = NULL;
     int realm_len = 0;
 
-    unsigned char *nonce = (void *)0;
+    unsigned char *nonce = NULL;
     int nonce_len = 0;
 
     char *ptr;
@@ -10596,14 +10592,14 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
                     DEBUG_PRINT("KEY: %s\n", key);
                 
                     md5_init(&md5_state);
-                    md5_process(&md5_state, key, strlen(key));
+                    md5_process(&md5_state, (unsigned char *)key, strlen(key));
                     md5_done(&md5_state, md5_hash);
 
                     DEBUG_DUMP_HEX_LABEL("HASH", md5_hash, 16);
 
                     hmac_init(&hmac, find_hash("sha1"), md5_hash, 16);
                 } else
-                    hmac_init(&hmac, find_hash("sha1"), pwd, pwd_len);
+                    hmac_init(&hmac, find_hash("sha1"), (unsigned char *)pwd, pwd_len);
 
 
                 hmac_process(&hmac, stun_message, stun_message_len);
@@ -10709,7 +10705,7 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
         // must be computed before to be included in hmac!!!
         *(unsigned short *)&response_buffer[2] = htons(buffer_index + 4);
 
-        hmac_init(&hmac, find_hash("sha1"), pwd, pwd_len);
+        hmac_init(&hmac, find_hash("sha1"), (unsigned char *)pwd, pwd_len);
         hmac_process(&hmac, response_buffer, buffer_index);
         hmac_done(&hmac, response_buffer + buffer_index + 4, &hash_len);
 
@@ -10787,7 +10783,7 @@ int tls_stun_build(unsigned char transaction_id[12], char *username, int usernam
     hmac_state hmac;
     unsigned long hash_len = 20;
 
-    hmac_init(&hmac, find_hash("sha1"), pwd, pwd_len);
+    hmac_init(&hmac, find_hash("sha1"), (unsigned char *)pwd, pwd_len);
     hmac_process(&hmac, msg, len - 24);
     hmac_done(&hmac, msg + len - 20, &hash_len);
 
@@ -10811,7 +10807,7 @@ int tls_cert_fingerprint(const char *pem_data, int pem_size, char *buffer, unsig
     if ((!buffer) || (!buf_len))
         return TLS_GENERIC_ERROR;
 
-    unsigned char *data = tls_pem_decode(pem_data, pem_size, 0, &len);
+    unsigned char *data = tls_pem_decode((const unsigned char *)pem_data, pem_size, 0, &len);
     if (!data)
         return TLS_GENERIC_ERROR;
 
@@ -11120,7 +11116,7 @@ int tls_peerconnection_remote_credentials(struct TLSRTCPeerConnection *channel, 
     }
 
     if ((remote_username) && (remote_username_len > 0)) {
-        channel->remote_user = TLS_MALLOC(remote_username_len + 1);
+        channel->remote_user = (unsigned char *)TLS_MALLOC(remote_username_len + 1);
         if (!channel->remote_user)
             return TLS_NO_MEMORY;
 
@@ -11130,7 +11126,7 @@ int tls_peerconnection_remote_credentials(struct TLSRTCPeerConnection *channel, 
     }
 
     if ((remote_pwd) && (remote_pwd_len > 0)) {
-        channel->remote_pwd = TLS_MALLOC(remote_pwd_len + 1);
+        channel->remote_pwd = (unsigned char *)TLS_MALLOC(remote_pwd_len + 1);
         if (!channel->remote_pwd)
             return TLS_NO_MEMORY;
 
@@ -11186,12 +11182,12 @@ int tls_peerconnection_connect(struct TLSRTCPeerConnection *channel, tls_peercon
     if ((!channel) || (!channel->remote_pwd) || (!channel->remote_user))
         return TLS_GENERIC_ERROR;
 
-    char msg[1024];
+    unsigned char msg[1024];
     char full_user[1024];
 
     snprintf(full_user, sizeof(full_user), "%s:%s", channel->remote_user, channel->local_user);
 
-    int len = tls_stun_build(channel->stun_transcation_id, full_user, strlen(full_user), channel->remote_pwd, channel->remote_pwd_len, msg);
+    int len = tls_stun_build(channel->stun_transcation_id, full_user, strlen(full_user), (char *)channel->remote_pwd, channel->remote_pwd_len, msg);
     if (len < 0)
         return 0;
 
@@ -11210,7 +11206,9 @@ void _private_dtls_ensure_keys(struct TLSRTCPeerConnection *channel) {
         if (key_size > 0) {
             DEBUG_DUMP_HEX_LABEL("SRTP KEY", key_buffer, key_size);
 
-            channel->context->dtls_data->srtp = srtp_init(SRTP_AES_CM, SRTP_AUTH_HMAC_SHA1);
+            channel->srtp_local = srtp_init(SRTP_AES_CM, SRTP_AUTH_HMAC_SHA1);
+            channel->srtp_remote = srtp_init(SRTP_AES_CM, SRTP_AUTH_HMAC_SHA1);
+
             unsigned char *localkey;
             unsigned char *remotekey;
             unsigned char *localsalt;
@@ -11228,7 +11226,8 @@ void _private_dtls_ensure_keys(struct TLSRTCPeerConnection *channel) {
                 remotesalt = key_buffer + SRTP_MASTER_KEY_KEY_LEN + SRTP_MASTER_KEY_KEY_LEN + SRTP_MASTER_KEY_SALT_LEN;
             }
 
-            srtp_key(channel->context->dtls_data->srtp, remotekey, 16, remotesalt, 14, 32);
+            srtp_key(channel->srtp_local, localkey, 16, localsalt, 14, 32);
+            srtp_key(channel->srtp_remote, remotekey, 16, remotesalt, 14, 32);
         }
     }
 #endif
@@ -11311,13 +11310,13 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
     if ((buf[0] >= 128) && (buf[0] <= 191)) {
         DEBUG_PRINT("RECEIVED RTP PACKET\n");
 #ifdef TLS_SRTP
-        if (channel->context->dtls_data->srtp) {
+        if (channel->srtp_remote) {
             DEBUG_PRINT("SRTP\n");
             DEBUG_DUMP_HEX_LABEL("SRTP", buf, buf_len);
             if (buf_len > 12) {
                 unsigned char out[0x4000];
                 int out_buffer_len = sizeof(out);
-                int len = srtp_decrypt(channel->context->dtls_data->srtp, 1, buf, 12, buf + 12, buf_len - 12, out, &out_buffer_len);
+                int len = srtp_decrypt(channel->srtp_remote, 1, buf, 12, buf + 12, buf_len - 12, out, &out_buffer_len);
                 
                 if (len >= 0) {
                     DEBUG_DUMP_HEX_LABEL("RTP header", buf, 12);
@@ -11361,6 +11360,13 @@ void tls_destroy_peerconnection(struct TLSRTCPeerConnection *channel) {
         TLS_FREE(channel->remote_user);
     if (channel->remote_pwd)
         TLS_FREE(channel->remote_pwd);
+
+#ifdef TLS_SRTP
+    if (channel->srtp_local)
+        srtp_destroy(channel->srtp_local);
+    if (channel->srtp_remote)
+        srtp_destroy(channel->srtp_remote);
+#endif
 
     TLS_FREE(channel);
 }
@@ -12018,6 +12024,20 @@ void srtp_destroy(struct SRTPContext *context) {
 
         TLS_FREE(context);
     }
+}
+
+struct SRTPContext *tls_peerconnection_srtp_local(struct TLSRTCPeerConnection *channel) {
+    if (!channel)
+        return NULL;
+
+    return channel->srtp_local;
+}
+
+struct SRTPContext *tls_peerconnection_srtp_remote(struct TLSRTCPeerConnection *channel) {
+    if (!channel)
+        return NULL;
+
+    return channel->srtp_remote;
 }
 
 #endif // TLS_SRTP
