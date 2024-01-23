@@ -1318,7 +1318,6 @@ struct TLSPacket {
     struct TLSContext *context;
 };
 
-#define SRTP_MASTER_KEY_LEN             30
 #define SRTP_MASTER_KEY_KEY_LEN         16
 #define SRTP_MASTER_KEY_SALT_LEN        14
 
@@ -10428,7 +10427,7 @@ int tls_srtp_key(struct TLSContext *context, unsigned char *buffer) {
     if ((!context->master_key) || (!context->master_key_len))
         return TLS_GENERIC_ERROR;
 
-    unsigned char material[SRTP_MASTER_KEY_LEN << 1];
+    unsigned char material[(SRTP_MASTER_KEY_KEY_LEN + SRTP_MASTER_KEY_SALT_LEN) * 2];
 
     if (context->is_server)
         _private_tls_prf(context, material, sizeof(material), context->master_key, context->master_key_len, (unsigned char *)"EXTRACTOR-dtls_srtp", 19, context->local_random, TLS_SERVER_RANDOM_SIZE, context->remote_random, TLS_CLIENT_RANDOM_SIZE);
@@ -11199,9 +11198,46 @@ int tls_peerconnection_connect(struct TLSRTCPeerConnection *channel, tls_peercon
     return write_function(channel, msg, len);
 }
 
+void _private_dtls_ensure_keys(struct TLSRTCPeerConnection *channel) {
+#ifdef TLS_SRTP
+    if ((channel->remote_state != 3) && (tls_established(channel->context) == 1)) {
+        DEBUG_PRINT("******** HAVE REMOTE SRTP KEY ***********\n");
+        channel->remote_state = 3;
+
+        unsigned char key_buffer[(SRTP_MASTER_KEY_KEY_LEN + SRTP_MASTER_KEY_SALT_LEN) * 2];
+        int key_size = tls_srtp_key(channel->context, key_buffer);
+
+        if (key_size > 0) {
+            DEBUG_DUMP_HEX_LABEL("SRTP KEY", key_buffer, key_size);
+
+            channel->context->dtls_data->srtp = srtp_init(SRTP_AES_CM, SRTP_AUTH_HMAC_SHA1);
+            unsigned char *localkey;
+            unsigned char *remotekey;
+            unsigned char *localsalt;
+            unsigned char *remotesalt;
+
+            if (channel->context->is_server) {
+                remotekey = key_buffer;
+                localkey = key_buffer + SRTP_MASTER_KEY_KEY_LEN;
+                remotesalt = key_buffer + SRTP_MASTER_KEY_KEY_LEN + SRTP_MASTER_KEY_KEY_LEN;
+                localsalt = key_buffer + SRTP_MASTER_KEY_KEY_LEN + SRTP_MASTER_KEY_KEY_LEN + SRTP_MASTER_KEY_SALT_LEN;
+            } else {
+                localkey = key_buffer;
+                remotekey = key_buffer + SRTP_MASTER_KEY_KEY_LEN;
+                localsalt = key_buffer + SRTP_MASTER_KEY_KEY_LEN + SRTP_MASTER_KEY_KEY_LEN;
+                remotesalt = key_buffer + SRTP_MASTER_KEY_KEY_LEN + SRTP_MASTER_KEY_KEY_LEN + SRTP_MASTER_KEY_SALT_LEN;
+            }
+
+            srtp_key(channel->context->dtls_data->srtp, remotekey, 16, remotesalt, 14, 32);
+        }
+    }
+#endif
+}
+
 int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned char *buf, int buf_len, unsigned char *addr, int port, unsigned char is_ipv6, tls_peerconnection_write_function write_function) {
-    if ((!buf) || (buf_len <= 0))
+    if ((!channel) || (!buf) || (buf_len <= 0))
         return 0;
+
 
     int err;
     struct TLSContext *context = NULL;
@@ -11255,21 +11291,6 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
             channel->remote_state = 2;
 
         err = tls_consume_stream(channel->context, buf, buf_len, channel->certificate_verify);
-#ifdef TLS_SRTP
-        if ((channel->context->master_key) && (channel->context->master_key_len > 0)) {
-            DEBUG_PRINT("******** HAVE REMOTE SRTP KEY ***********\n");
-            channel->remote_state = 3;
-
-            unsigned char key_buffer[64];
-            int key_size = tls_srtp_key(channel->context, key_buffer);
-
-            if (key_size > 0) {
-                DEBUG_DUMP_HEX_LABEL("SRTP KEY", key_buffer, key_size);
-                channel->context->dtls_data->srtp = srtp_init(SRTP_AES_CM, SRTP_AUTH_HMAC_SHA1);
-                srtp_key(channel->context->dtls_data->srtp, key_buffer, 16, key_buffer + 16, 14, 32);
-            }
-        }
-#endif
 
         unsigned int out_buffer_len = 0;
         const unsigned char *out_buffer = tls_get_write_buffer(channel->context, &out_buffer_len);
@@ -11282,6 +11303,8 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
         if (err < 0)
             return err;
 
+        _private_dtls_ensure_keys(channel);
+
         return 0;
     }
 
@@ -11290,6 +11313,17 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
 #ifdef TLS_SRTP
         if (channel->context->dtls_data->srtp) {
             DEBUG_PRINT("SRTP\n");
+            DEBUG_DUMP_HEX_LABEL("SRTP", buf, buf_len);
+            if (buf_len > 12) {
+                unsigned char out[0x4000];
+                int out_buffer_len = sizeof(out);
+                int len = srtp_decrypt(channel->context->dtls_data->srtp, 1, buf, 12, buf + 12, buf_len - 12, out, &out_buffer_len);
+                
+                if (len >= 0) {
+                    DEBUG_DUMP_HEX_LABEL("RTP header", buf, 12);
+                    DEBUG_DUMP_HEX_LABEL("RTP payload", out, out_buffer_len);
+                }
+            }
         } else {
             DEBUG_PRINT("DTLS-SRTP HANDSHAKE NOT YET ESTABLISHED\n");
         }
@@ -11297,6 +11331,23 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
         return 0;
     }
     return 0;
+}
+
+int tls_peerconnection_status(struct TLSRTCPeerConnection *channel) {
+    if (!channel)
+        return -1;
+
+    // 0 not connected
+    // 1 stun received
+    // 2 dtls received
+    // 3 srtp ready
+    // 4 closed
+
+    int status = channel->remote_state;
+    if (channel->context->critical_error)
+        status = 4;
+
+    return status;
 }
 
 void tls_destroy_peerconnection(struct TLSRTCPeerConnection *channel) {
@@ -11698,6 +11749,11 @@ struct SRTPContext {
     symmetric_CTR aes;
     unsigned int salt[4];
     unsigned char mac[TLS_SHA1_MAC_SIZE];
+
+    symmetric_CTR rtcp_aes;
+    unsigned int rtcp_salt[4];
+    unsigned char rtcp_mac[TLS_SHA1_MAC_SIZE];
+
     unsigned int tag_size;
     unsigned int roc;
     unsigned short seq;
@@ -11787,6 +11843,25 @@ int srtp_key(struct SRTPContext *context, const void *key, int keylen, const voi
 
         if (ctr_start(find_cipher("aes"), iv, key_buf, sizeof(key_buf), 0, CTR_COUNTER_BIG_ENDIAN, &context->aes))
             return TLS_GENERIC_ERROR;
+
+        if (_private_tls_srtp_key_derive(key, keylen, salt, 3, key_buf, sizeof(key_buf)))
+            return TLS_GENERIC_ERROR;
+
+        DEBUG_DUMP_HEX_LABEL("RTCP KEY", key_buf, 16)
+
+        if (_private_tls_srtp_key_derive(key, keylen, salt, 4, context->rtcp_mac, 20))
+            return TLS_GENERIC_ERROR;
+
+        DEBUG_DUMP_HEX_LABEL("RTCP AUTH", context->rtcp_mac, 20)
+
+        memset(context->salt, 0, sizeof(context->salt));
+        if (_private_tls_srtp_key_derive(key, keylen, salt, 5, context->rtcp_salt, 14))
+            return TLS_GENERIC_ERROR;
+
+        DEBUG_DUMP_HEX_LABEL("RTCP SALT", ((unsigned char *)context->rtcp_salt), 14)
+
+        if (ctr_start(find_cipher("aes"), iv, key_buf, sizeof(key_buf), 0, CTR_COUNTER_BIG_ENDIAN, &context->rtcp_aes))
+            return TLS_GENERIC_ERROR;
     }
     if (context->auth_mode)
         context->tag_size = tag_bits / 8;
@@ -11814,7 +11889,7 @@ int srtp_inline(struct SRTPContext *context, const char *b64, int tag_bits) {
     return TLS_GENERIC_ERROR;
 }
 
-int srtp_encrypt(struct SRTPContext *context, const unsigned char *pt_header, int pt_len, const unsigned char *payload, unsigned int payload_len, unsigned char *out, int *out_buffer_len) {
+int srtp_encrypt(struct SRTPContext *context, unsigned char rtcp, const unsigned char *pt_header, int pt_len, const unsigned char *payload, unsigned int payload_len, unsigned char *out, int *out_buffer_len) {
     if ((!context) || (!out) || (!out_buffer_len) || (*out_buffer_len < payload_len))
         return TLS_GENERIC_ERROR;
 
@@ -11843,7 +11918,7 @@ int srtp_encrypt(struct SRTPContext *context, const unsigned char *pt_header, in
         counter[2] = context->salt[2] ^ roc_be;
         counter[3] = context->salt[3] ^ htonl (seq << 16);
         ctr_setiv((unsigned char *)&counter, 16, &context->aes);
-        if (ctr_encrypt(payload, out, payload_len, &context->aes))
+        if (ctr_encrypt(payload, out, payload_len, rtcp ? &context->rtcp_aes : &context->aes))
             return TLS_GENERIC_ERROR;
     } else {
         memcpy(out, payload, payload_len);
@@ -11878,7 +11953,7 @@ int srtp_encrypt(struct SRTPContext *context, const unsigned char *pt_header, in
     return 0;
 }
 
-int srtp_decrypt(struct SRTPContext *context, const unsigned char *pt_header, int pt_len, const unsigned char *payload, unsigned int payload_len, unsigned char *out, int *out_buffer_len) {
+int srtp_decrypt(struct SRTPContext *context, unsigned char rtcp, const unsigned char *pt_header, int pt_len, const unsigned char *payload, unsigned int payload_len, unsigned char *out, int *out_buffer_len) {
     if ((!context) || (!out) || (!out_buffer_len) || (*out_buffer_len < payload_len) || (payload_len < context->tag_size) || (!pt_header) || (pt_len < 12))
         return TLS_GENERIC_ERROR;
 
@@ -11900,7 +11975,7 @@ int srtp_decrypt(struct SRTPContext *context, const unsigned char *pt_header, in
         counter[3] = context->salt[3] ^ htonl (seq << 16);
         ctr_setiv((unsigned char *)&counter, 16, &context->aes);
 
-        if (ctr_decrypt(payload, out, payload_len - context->tag_size, &context->aes))
+        if (ctr_decrypt(payload, out, payload_len - context->tag_size, rtcp ? &context->rtcp_aes : &context->aes))
             return TLS_GENERIC_ERROR;
 
         if (context->auth_mode == SRTP_AUTH_HMAC_SHA1) {
