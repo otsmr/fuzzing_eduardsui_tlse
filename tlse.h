@@ -453,6 +453,9 @@ int tls_remote_error(struct TLSContext *context);
     int srtp_encrypt(struct SRTPContext *context, unsigned char rtcp, const unsigned char *pt_header, int pt_len, const unsigned char *payload, unsigned int payload_len, unsigned char *out, int *out_buffer_len);
     int srtp_decrypt(struct SRTPContext *context, unsigned char rtcp, const unsigned char *pt_header, int pt_len, const unsigned char *payload, unsigned int payload_len, unsigned char *out, int *out_buffer_len);
     void srtp_destroy(struct SRTPContext *context);
+
+    struct SRTPContext *tls_peerconnection_srtp_local(struct TLSRTCPeerConnection *channel);
+    struct SRTPContext *tls_peerconnection_srtp_remote(struct TLSRTCPeerConnection *channel);
 #endif
 
 #ifdef __cplusplus
