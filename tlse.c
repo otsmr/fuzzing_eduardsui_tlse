@@ -12011,8 +12011,11 @@ int srtp_decrypt(struct SRTPContext *context, unsigned char rtcp, const unsigned
 
 void srtp_destroy(struct SRTPContext *context) {
     if (context) {
-        if (context->mode)
+        if (context->mode) {
             ctr_done(&context->aes);
+            ctr_done(&context->rtcp_aes);
+        }
+
         TLS_FREE(context);
     }
 }
