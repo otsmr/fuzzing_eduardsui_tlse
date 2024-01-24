@@ -2,6 +2,8 @@
 
 Single C file TLS 1.3, 1.2, 1.1 and 1.0(without the weak ciphers) implementation, using [libtomcrypt](https://github.com/libtom/libtomcrypt "libtomcrypt") as crypto library. It also supports DTLS 1.2 and 1.0. Before using tlse.c you may want to download and compile tomcrypt; alternatively you may use libtomcrypt.c (see Compiling). I'm working at an alternative efficient RSA signing, DH and Curve25519 implementation, to allow the compilation, alternatively, without tomcrypt, on devices where memory and code size is an issue.
 
+As secondary features, it supports SRTP key exchange, encryption and decription, DTLS-SRTP and WebRTC RTCPeerConnection without any dependencies (you can stream audio/video from your C server to a browser via WebRTC).
+
 **Note**: It does not implement 0-RTT. Client-side TLS 1.3 support is experimental.
 
 Like this project ? You may donate Bitcoin for this project at 14LqvMzFfaJ82C7wY5iavvTf9HPELYWsax
