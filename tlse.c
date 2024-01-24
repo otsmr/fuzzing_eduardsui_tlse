@@ -11093,6 +11093,18 @@ struct TLSRTCPeerConnection *tls_peerconnection_context(unsigned char active, tl
     return channel;
 }
 
+struct TLSRTCPeerConnection *tls_peerconnection_duplicate(struct TLSRTCPeerConnection *channel, void *userdata) {
+    if ((!channel) || (channel->active) || (!channel->context))
+        return NULL;
+
+    struct TLSRTCPeerConnection *clone = tls_peerconnection_context(0, channel->certificate_verify, userdata);
+    clone->context = tls_accept(channel->context);
+    tls_srtp_set(clone->context);
+    tls_add_alpn(clone->context, "webrtc");
+
+    return clone;
+}
+
 struct TLSContext *tls_peerconnection_dtls_context(struct TLSRTCPeerConnection *channel) {
     if (!channel)
         return NULL;
