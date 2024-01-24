@@ -1341,7 +1341,6 @@ struct TLSRTCPeerConnection {
     struct SRTPContext *srtp_local;
     struct SRTPContext *srtp_remote;
 #endif
-
 };
 
 #ifdef SSL_COMPATIBLE_INTERFACE
@@ -11226,8 +11225,8 @@ void _private_dtls_ensure_keys(struct TLSRTCPeerConnection *channel) {
                 remotesalt = key_buffer + SRTP_MASTER_KEY_KEY_LEN + SRTP_MASTER_KEY_KEY_LEN + SRTP_MASTER_KEY_SALT_LEN;
             }
 
-            srtp_key(channel->srtp_local, localkey, 16, localsalt, 14, 32);
-            srtp_key(channel->srtp_remote, remotekey, 16, remotesalt, 14, 32);
+            srtp_key(channel->srtp_local, localkey, 16, localsalt, 14, 80);
+            srtp_key(channel->srtp_remote, remotekey, 16, remotesalt, 14, 80);
         }
     }
 #endif
@@ -11311,12 +11310,18 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
         DEBUG_PRINT("RECEIVED RTP PACKET\n");
 #ifdef TLS_SRTP
         if (channel->srtp_remote) {
-            DEBUG_PRINT("SRTP\n");
             DEBUG_DUMP_HEX_LABEL("SRTP", buf, buf_len);
             if (buf_len > 12) {
                 unsigned char out[0x4000];
                 int out_buffer_len = sizeof(out);
-                int len = srtp_decrypt(channel->srtp_remote, 1, buf, 12, buf + 12, buf_len - 12, out, &out_buffer_len);
+                int len = srtp_decrypt(channel->srtp_remote, 1, buf, 8, buf + 8, buf_len - 8, out, &out_buffer_len);
+                
+                if (len >= 0) {
+                    DEBUG_DUMP_HEX_LABEL("RTP header", buf, 12);
+                    DEBUG_DUMP_HEX_LABEL("RTP payload", out, out_buffer_len);
+                }
+
+                len = srtp_decrypt(channel->srtp_local, 1, buf, 8, buf + 8, buf_len - 8, out, &out_buffer_len);
                 
                 if (len >= 0) {
                     DEBUG_DUMP_HEX_LABEL("RTP header", buf, 12);
@@ -11836,10 +11841,10 @@ int srtp_key(struct SRTPContext *context, const void *key, int keylen, const voi
 
         DEBUG_DUMP_HEX_LABEL("KEY", key_buf, 16)
 
-        if (_private_tls_srtp_key_derive(key, keylen, salt, 1, context->mac, 20))
+        if (_private_tls_srtp_key_derive(key, keylen, salt, 1, context->mac, sizeof(context->mac)))
             return TLS_GENERIC_ERROR;
 
-        DEBUG_DUMP_HEX_LABEL("AUTH", context->mac, 20)
+        DEBUG_DUMP_HEX_LABEL("AUTH", context->mac, sizeof(context->mac))
 
         memset(context->salt, 0, sizeof(context->salt));
         if (_private_tls_srtp_key_derive(key, keylen, salt, 2, context->salt, 14))
@@ -11855,16 +11860,18 @@ int srtp_key(struct SRTPContext *context, const void *key, int keylen, const voi
 
         DEBUG_DUMP_HEX_LABEL("RTCP KEY", key_buf, 16)
 
-        if (_private_tls_srtp_key_derive(key, keylen, salt, 4, context->rtcp_mac, 20))
+        if (_private_tls_srtp_key_derive(key, keylen, salt, 4, context->rtcp_mac, sizeof(context->rtcp_mac)))
             return TLS_GENERIC_ERROR;
 
-        DEBUG_DUMP_HEX_LABEL("RTCP AUTH", context->rtcp_mac, 20)
+        DEBUG_DUMP_HEX_LABEL("RTCP AUTH", context->rtcp_mac, sizeof(context->rtcp_mac))
 
-        memset(context->salt, 0, sizeof(context->salt));
+        memset(context->rtcp_salt, 0, sizeof(context->rtcp_salt));
         if (_private_tls_srtp_key_derive(key, keylen, salt, 5, context->rtcp_salt, 14))
             return TLS_GENERIC_ERROR;
 
         DEBUG_DUMP_HEX_LABEL("RTCP SALT", ((unsigned char *)context->rtcp_salt), 14)
+
+        memset(iv, 0, sizeof(iv));
 
         if (ctr_start(find_cipher("aes"), iv, key_buf, sizeof(key_buf), 0, CTR_COUNTER_BIG_ENDIAN, &context->rtcp_aes))
             return TLS_GENERIC_ERROR;
@@ -11923,7 +11930,10 @@ int srtp_encrypt(struct SRTPContext *context, unsigned char rtcp, const unsigned
         counter[1] = context->salt[1] ^ htonl (ssrc);
         counter[2] = context->salt[2] ^ roc_be;
         counter[3] = context->salt[3] ^ htonl (seq << 16);
-        ctr_setiv((unsigned char *)&counter, 16, &context->aes);
+        if (rtcp)
+            ctr_setiv((unsigned char *)&counter, 16, &context->rtcp_aes);
+        else
+            ctr_setiv((unsigned char *)&counter, 16, &context->aes);
         if (ctr_encrypt(payload, out, payload_len, rtcp ? &context->rtcp_aes : &context->aes))
             return TLS_GENERIC_ERROR;
     } else {
@@ -11936,7 +11946,11 @@ int srtp_encrypt(struct SRTPContext *context, unsigned char rtcp, const unsigned
         unsigned char digest_out[TLS_SHA1_MAC_SIZE];
         unsigned long dlen = TLS_SHA1_MAC_SIZE;
         hmac_state hmac;
-        int err = hmac_init(&hmac, find_hash("sha1"), context->mac, 20);
+        int err;
+        if (rtcp)
+            err = hmac_init(&hmac, find_hash("sha1"), context->rtcp_mac, 20);
+        else
+            err = hmac_init(&hmac, find_hash("sha1"), context->mac, 20);
         if (!err) {
             if (pt_len)
                 err = hmac_process(&hmac, pt_header, pt_len);
@@ -11960,14 +11974,14 @@ int srtp_encrypt(struct SRTPContext *context, unsigned char rtcp, const unsigned
 }
 
 int srtp_decrypt(struct SRTPContext *context, unsigned char rtcp, const unsigned char *pt_header, int pt_len, const unsigned char *payload, unsigned int payload_len, unsigned char *out, int *out_buffer_len) {
-    if ((!context) || (!out) || (!out_buffer_len) || (*out_buffer_len < payload_len) || (payload_len < context->tag_size) || (!pt_header) || (pt_len < 12))
+    if ((!context) || (!out) || (!out_buffer_len) || (*out_buffer_len < payload_len) || (payload_len < context->tag_size) || (!pt_header) || ((pt_len < 12) && (!rtcp)) || ((pt_len < 8) && (rtcp)))
         return TLS_GENERIC_ERROR;
 
     int out_len = payload_len;
 
     unsigned short seq = ntohs(*((unsigned short *)&pt_header[2]));
     unsigned int roc = context->roc;
-    unsigned int ssrc = ntohl(*((unsigned long *)&pt_header[8]));
+    unsigned int ssrc = rtcp ? ntohl(*((unsigned long *)&pt_header[4])) : ntohl(*((unsigned long *)&pt_header[8]));
 
     if (seq < context->seq)
         roc++;
@@ -11979,20 +11993,33 @@ int srtp_decrypt(struct SRTPContext *context, unsigned char rtcp, const unsigned
         counter[1] = context->salt[1] ^ htonl (ssrc);
         counter[2] = context->salt[2] ^ roc_be;
         counter[3] = context->salt[3] ^ htonl (seq << 16);
-        ctr_setiv((unsigned char *)&counter, 16, &context->aes);
 
-        if (ctr_decrypt(payload, out, payload_len - context->tag_size, rtcp ? &context->rtcp_aes : &context->aes))
-            return TLS_GENERIC_ERROR;
+        if (rtcp) {
+            // uint32_t srtcp_index = ntohl(*(uint32_t *)&payload[payload_len - context->tag_size - 4]) & 0x7FFFFFFF;
+            ctr_setiv((unsigned char *)&counter, 16, &context->rtcp_aes);
+            if (payload_len - context->tag_size - 4 < 0)
+                return TLS_GENERIC_ERROR;
+            if (ctr_decrypt(payload, out, payload_len - context->tag_size - 4, &context->rtcp_aes))
+                return TLS_GENERIC_ERROR;
+        } else {
+            ctr_setiv((unsigned char *)&counter, 16, &context->aes);
+            if (ctr_decrypt(payload, out, payload_len - context->tag_size, &context->aes))
+                return TLS_GENERIC_ERROR;
+        }
 
         if (context->auth_mode == SRTP_AUTH_HMAC_SHA1) {
             unsigned char digest_out[TLS_SHA1_MAC_SIZE];
             unsigned long dlen = TLS_SHA1_MAC_SIZE;
             hmac_state hmac;
-            int err = hmac_init(&hmac, find_hash("sha1"), context->mac, 20);
+            int err;
+            if (rtcp)
+                err = hmac_init(&hmac, find_hash("sha1"), context->rtcp_mac, sizeof(context->rtcp_mac));
+            else
+                err = hmac_init(&hmac, find_hash("sha1"), context->mac, sizeof(context->mac));
             if (!err) {
                 if (pt_len)
                     err = hmac_process(&hmac, pt_header, pt_len);
-                if (out_len)
+                if ((payload_len - context->tag_size) > 0)
                     err = hmac_process(&hmac, payload, payload_len - context->tag_size);
                 err = hmac_process(&hmac, (unsigned char *)&roc_be, 4);
                 if (!err)
@@ -12003,8 +12030,11 @@ int srtp_decrypt(struct SRTPContext *context, unsigned char rtcp, const unsigned
             if (dlen > context->tag_size)
                 dlen = context->tag_size;
 
-            if (memcmp(digest_out, payload + payload_len - context->tag_size, dlen))
+            if (memcmp(digest_out, payload + payload_len - context->tag_size, dlen)) {
+                DEBUG_DUMP_HEX_LABEL("SRTP INTEGRITY FAILED (computed)", digest_out, dlen);
+                DEBUG_DUMP_HEX_LABEL("SRTP INTEGRITY FAILED (expected)", payload + payload_len - context->tag_size, dlen);
                 return TLS_INTEGRITY_FAILED;
+            }
         }
     } else {
         memcpy(out, payload, payload_len - context->tag_size);
@@ -12038,6 +12068,14 @@ struct SRTPContext *tls_peerconnection_srtp_remote(struct TLSRTCPeerConnection *
         return NULL;
 
     return channel->srtp_remote;
+}
+
+int tls_peerconnection_encrypt(struct TLSRTCPeerConnection *channel, unsigned char rtcp, const unsigned char *pt_header, int pt_len, const unsigned char *payload, unsigned int payload_len, unsigned char *out, int *out_buffer_len) {
+    return srtp_encrypt(channel->srtp_local, rtcp, pt_header, pt_len, payload, payload_len, out, out_buffer_len);
+}
+
+int tls_peerconnection_decrypt(struct TLSRTCPeerConnection *channel, unsigned char rtcp, const unsigned char *pt_header, int pt_len, const unsigned char *payload, unsigned int payload_len, unsigned char *out, int *out_buffer_len) {
+    return srtp_decrypt(channel->srtp_remote, rtcp, pt_header, pt_len, payload, payload_len, out, out_buffer_len);
 }
 
 #endif // TLS_SRTP
