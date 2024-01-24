@@ -10425,12 +10425,14 @@ int tls_srtp_key(struct TLSContext *context, unsigned char *buffer) {
     unsigned char material[(SRTP_MASTER_KEY_KEY_LEN + SRTP_MASTER_KEY_SALT_LEN) * 2];
 
     if (context->is_server)
-        _private_tls_prf(context, material, sizeof(material), context->master_key, context->master_key_len, (unsigned char *)"EXTRACTOR-dtls_srtp", 19, context->local_random, TLS_SERVER_RANDOM_SIZE, context->remote_random, TLS_CLIENT_RANDOM_SIZE);
-    else
         _private_tls_prf(context, material, sizeof(material), context->master_key, context->master_key_len, (unsigned char *)"EXTRACTOR-dtls_srtp", 19, context->remote_random, TLS_SERVER_RANDOM_SIZE, context->local_random, TLS_CLIENT_RANDOM_SIZE);
+    else
+        _private_tls_prf(context, material, sizeof(material), context->master_key, context->master_key_len, (unsigned char *)"EXTRACTOR-dtls_srtp", 19, context->local_random, TLS_SERVER_RANDOM_SIZE, context->remote_random, TLS_CLIENT_RANDOM_SIZE);
 
     if (buffer)
         memcpy(buffer, material, sizeof(material));
+
+    DEBUG_DUMP_HEX_LABEL("USING MASTER KEY", context->master_key, context->master_key_len);
     return sizeof(material);
 }
 
@@ -11285,6 +11287,10 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
 
     if ((buf[0] >= 20)  && (buf[0] <= 64)) {
         DEBUG_PRINT("RECEIVED DTLS PACKET\n");
+        if (!channel->remote_state) {
+            DEBUG_PRINT("NO STUN ASSOCIATION, IGNORED DTLS PACKET\n");
+            return 0;
+        }
         if (channel->remote_state == 1)
             channel->remote_state = 2;
 
@@ -11930,12 +11936,15 @@ int srtp_encrypt(struct SRTPContext *context, unsigned char rtcp, const unsigned
         counter[1] = context->salt[1] ^ htonl (ssrc);
         counter[2] = context->salt[2] ^ roc_be;
         counter[3] = context->salt[3] ^ htonl (seq << 16);
-        if (rtcp)
+        if (rtcp) {
             ctr_setiv((unsigned char *)&counter, 16, &context->rtcp_aes);
-        else
+            if (ctr_encrypt(payload, out, payload_len, &context->rtcp_aes))
+                return TLS_GENERIC_ERROR;
+        } else {
             ctr_setiv((unsigned char *)&counter, 16, &context->aes);
-        if (ctr_encrypt(payload, out, payload_len, rtcp ? &context->rtcp_aes : &context->aes))
-            return TLS_GENERIC_ERROR;
+            if (ctr_encrypt(payload, out, payload_len, &context->aes))
+                return TLS_GENERIC_ERROR;
+        }
     } else {
         memcpy(out, payload, payload_len);
     }
@@ -11992,16 +12001,18 @@ int srtp_decrypt(struct SRTPContext *context, unsigned char rtcp, const unsigned
         counter[0] = context->salt[0];
         counter[1] = context->salt[1] ^ htonl (ssrc);
         counter[2] = context->salt[2] ^ roc_be;
-        counter[3] = context->salt[3] ^ htonl (seq << 16);
-
         if (rtcp) {
-            // uint32_t srtcp_index = ntohl(*(uint32_t *)&payload[payload_len - context->tag_size - 4]) & 0x7FFFFFFF;
+            uint32_t srtcp_index = ntohl(*(uint32_t *)&payload[payload_len - context->tag_size - 4]) & 0x7FFFFFFF;
+            counter[3] = context->salt[3] ^ htonl (srtcp_index);
+            // ((unsigned cscrhar *)payload)[payload_len - context->tag_size - 4] &= 0x7F;
+            // DEBUG_DUMP_HEX_LABEL("MODIFIED PACKET", payload, payload_len);
             ctr_setiv((unsigned char *)&counter, 16, &context->rtcp_aes);
             if (payload_len - context->tag_size - 4 < 0)
                 return TLS_GENERIC_ERROR;
             if (ctr_decrypt(payload, out, payload_len - context->tag_size - 4, &context->rtcp_aes))
                 return TLS_GENERIC_ERROR;
         } else {
+            counter[3] = context->salt[3] ^ htonl (seq << 16);
             ctr_setiv((unsigned char *)&counter, 16, &context->aes);
             if (ctr_decrypt(payload, out, payload_len - context->tag_size, &context->aes))
                 return TLS_GENERIC_ERROR;
