@@ -363,6 +363,7 @@ int tls_is_stun(const unsigned char *msg, int len);
 typedef int (*tls_peerconnection_write_function)(struct TLSRTCPeerConnection *channel, const unsigned char *msg, int msg_len);
 
 struct TLSRTCPeerConnection *tls_peerconnection_context(unsigned char active, tls_validation_function certificate_verify, void *userdata);
+struct TLSRTCPeerConnection *tls_peerconnection_duplicate(struct TLSRTCPeerConnection *channel, void *userdata);
 struct TLSContext *tls_peerconnection_dtls_context(struct TLSRTCPeerConnection *channel);
 int tls_peerconnection_remote_credentials(struct TLSRTCPeerConnection *channel, char *remote_username, int remote_username_len, char *remote_pwd, int remote_pwd_len);
 const char *tls_peerconnection_local_pwd(struct TLSRTCPeerConnection *channel);
@@ -456,6 +457,8 @@ int tls_remote_error(struct TLSContext *context);
 
     struct SRTPContext *tls_peerconnection_srtp_local(struct TLSRTCPeerConnection *channel);
     struct SRTPContext *tls_peerconnection_srtp_remote(struct TLSRTCPeerConnection *channel);
+    int tls_peerconnection_encrypt(struct TLSRTCPeerConnection *channel, unsigned char rtcp, const unsigned char *pt_header, int pt_len, const unsigned char *payload, unsigned int payload_len, unsigned char *out, int *out_buffer_len);
+    int tls_peerconnection_decrypt(struct TLSRTCPeerConnection *channel, unsigned char rtcp, const unsigned char *pt_header, int pt_len, const unsigned char *payload, unsigned int payload_len, unsigned char *out, int *out_buffer_len);
 #endif
 
 #ifdef __cplusplus
