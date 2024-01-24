@@ -7115,6 +7115,7 @@ int tls_parse_certificate(struct TLSContext *context, const unsigned char *buf, 
                         res2 += size;
                         remaining -= size;
                     }
+                    res2 += 2;
                 }
             }
 #endif
