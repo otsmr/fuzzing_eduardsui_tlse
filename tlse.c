@@ -10621,7 +10621,7 @@ int tls_stun_parse(unsigned char *msg, int len, char *pwd, int pwd_len, unsigned
 
                 if (memcmp(msg, hash, 16)) {
                     DEBUG_PRINT("MESSAGE-INTEGRITY check failed\n");
-                    return TLS_GENERIC_ERROR;
+                    return TLS_INTEGRITY_FAILED;
                 }
                 validated = 1;
                 break;
@@ -11084,7 +11084,7 @@ struct TLSRTCPeerConnection *tls_peerconnection_context(unsigned char active, tl
         tls_random(channel->stun_transcation_id, 12);
 
         unsigned char buffer[32];
-        tls_random(channel->stun_transcation_id, 32);
+        tls_random(buffer, 32);
 
         int i;
         for (i = 0; i < 4; i ++)
@@ -11092,7 +11092,7 @@ struct TLSRTCPeerConnection *tls_peerconnection_context(unsigned char active, tl
         channel->local_user[4] = 0;
 
         for (i = 0; i < 24; i ++)
-            channel->local_pwd[i] = pwd_chars[buffer[i + 4] % sizeof(pwd_chars)];
+            channel->local_pwd[i] = pwd_chars[buffer[i + 4] % (sizeof(pwd_chars) - 1)];
 
         channel->local_pwd[24] = 0;
 
@@ -11333,10 +11333,12 @@ void _private_dtls_ensure_keys(struct TLSRTCPeerConnection *channel) {
 #endif
 }
 
-int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned char *buf, int buf_len, unsigned char *addr, int port, unsigned char is_ipv6, tls_peerconnection_write_function write_function) {
+int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned char *buf, int buf_len, unsigned char *addr, int port, unsigned char is_ipv6, tls_peerconnection_write_function write_function, int *validate_addr) {
+    if (validate_addr)
+        *validate_addr = 0;
+
     if ((!channel) || (!buf) || (buf_len <= 0))
         return 0;
-
 
     int err;
     struct TLSContext *context = NULL;
@@ -11344,6 +11346,9 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
         DEBUG_PRINT("RECEIVED STUN PACKET\n");
         unsigned char response_buffer[0x8000];
         int len = tls_stun_parse(buf, buf_len, channel->local_pwd, strlen(channel->local_pwd), is_ipv6, addr, port, response_buffer);
+
+        if ((len >= 0) && (validate_addr))
+            *validate_addr = 1;
 
         unsigned short type = ntohs(*(unsigned short *)buf);
 
