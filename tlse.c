@@ -1313,6 +1313,13 @@ struct TLSPacket {
     struct TLSContext *context;
 };
 
+struct TLSRTCPeerBuffer {
+    unsigned char *buf;
+    unsigned int len;
+
+    void *next;
+};
+
 #define SRTP_MASTER_KEY_KEY_LEN         16
 #define SRTP_MASTER_KEY_SALT_LEN        14
 
@@ -1341,6 +1348,9 @@ struct TLSRTCPeerConnection {
     struct SRTPContext *srtp_local;
     struct SRTPContext *srtp_remote;
 #endif
+
+    struct TLSRTCPeerBuffer *write_buffer;
+    struct TLSRTCPeerBuffer *read_buffer;
 };
 
 #ifdef SSL_COMPATIBLE_INTERFACE
@@ -11192,6 +11202,79 @@ int tls_peerconnection_load_keys(struct TLSRTCPeerConnection *channel, const uns
     return 0;
 }
 
+int _private_tls_peerconnection_buffer_add(struct TLSRTCPeerBuffer **use_buffer, const unsigned char *buf, int len) {
+    if ((!use_buffer) || (!buf) || (!len))
+        return TLS_GENERIC_ERROR;
+
+    struct TLSRTCPeerBuffer *buffer = (struct TLSRTCPeerBuffer *)TLS_MALLOC(sizeof(struct TLSRTCPeerBuffer));
+    if (!buffer)
+        return TLS_NO_MEMORY;
+
+    buffer->buf = (unsigned char *)TLS_MALLOC(len);
+    if (!buffer->buf) {
+        TLS_FREE(buffer);
+        return TLS_NO_MEMORY;
+    }
+
+    memcpy(buffer->buf, buf, len);
+    buffer->len = len;
+    buffer->next = NULL;
+
+    if (*use_buffer) {
+        struct TLSRTCPeerBuffer *next = *use_buffer;
+        while ((next) && (next->next))
+            next = (struct TLSRTCPeerBuffer *)next->next;
+        next->next = buffer;
+    } else
+        *use_buffer = buffer;
+
+    return len;
+}
+
+int tls_peerconnection_get_write_msg(struct TLSRTCPeerConnection *channel, unsigned char *buf) {
+    if ((!channel) || (!channel->write_buffer))
+        return 0;
+
+    struct TLSRTCPeerBuffer *buffer = channel->write_buffer;
+
+    int len = buffer->len;
+
+    if (!buf)
+        return len;
+
+    channel->write_buffer = (struct TLSRTCPeerBuffer *)buffer->next;
+
+    memcpy(buf, buffer->buf, buffer->len);
+
+    if (buffer->buf)
+        TLS_FREE(buffer->buf);
+    TLS_FREE(buffer);
+
+    return len;
+}
+
+int tls_peerconnection_get_read_msg(struct TLSRTCPeerConnection *channel, unsigned char *buf) {
+    if ((!channel) || (!channel->read_buffer))
+        return 0;
+
+    struct TLSRTCPeerBuffer *buffer = channel->read_buffer;
+
+    int len = buffer->len;
+
+    if (!buf)
+        return len;
+
+    channel->read_buffer = (struct TLSRTCPeerBuffer *)buffer->next;
+
+    memcpy(buf, buffer->buf, buffer->len);
+
+    if (buffer->buf)
+        TLS_FREE(buffer->buf);
+    TLS_FREE(buffer);
+
+    return len;
+}
+
 int tls_peerconnection_connect(struct TLSRTCPeerConnection *channel, tls_peerconnection_write_function write_function) {
     if ((!channel) || (!channel->remote_pwd) || (!channel->remote_user))
         return TLS_GENERIC_ERROR;
@@ -11204,6 +11287,9 @@ int tls_peerconnection_connect(struct TLSRTCPeerConnection *channel, tls_peercon
     int len = tls_stun_build(channel->stun_transcation_id, full_user, strlen(full_user), (char *)channel->remote_pwd, channel->remote_pwd_len, msg);
     if (len < 0)
         return 0;
+
+    if (!write_function)
+        return _private_tls_peerconnection_buffer_add(&channel->write_buffer, msg, len);
 
     return write_function(channel, msg, len);
 }
@@ -11280,7 +11366,11 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
         }
 
         if (len > 0) {
-            err = write_function(channel, response_buffer, len);
+            if (write_function)
+                err = write_function(channel, response_buffer, len);
+            else
+                err = _private_tls_peerconnection_buffer_add(&channel->write_buffer, response_buffer, len);
+
             if (err <= 0)
                 return err;
         }
@@ -11289,7 +11379,10 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
             unsigned int out_buffer_len = 0;
             const unsigned char *out_buffer = tls_get_write_buffer(context, &out_buffer_len);
             if ((out_buffer) && (out_buffer_len)) {
-                err = write_function(channel, out_buffer, out_buffer_len);
+                if (write_function)
+                    err = write_function(channel, out_buffer, out_buffer_len);
+                else
+                    err = _private_tls_peerconnection_buffer_add(&channel->write_buffer, out_buffer, out_buffer_len);
                 if (err > 0)
                     tls_buffer_clear(context);
             }
@@ -11312,7 +11405,10 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
         unsigned int out_buffer_len = 0;
         const unsigned char *out_buffer = tls_get_write_buffer(channel->context, &out_buffer_len);
         if ((out_buffer) && (out_buffer_len)) {
-            err = write_function(channel, out_buffer, out_buffer_len);
+            if (write_function)
+                err = write_function(channel, out_buffer, out_buffer_len);
+            else
+                err = _private_tls_peerconnection_buffer_add(&channel->write_buffer, out_buffer, out_buffer_len);
             if (err > 0)
                 tls_buffer_clear(channel->context);
         }
@@ -11338,13 +11434,8 @@ int tls_peerconnection_iterate(struct TLSRTCPeerConnection *channel, unsigned ch
                 if (len >= 0) {
                     DEBUG_DUMP_HEX_LABEL("RTP header", buf, 12);
                     DEBUG_DUMP_HEX_LABEL("RTP payload", out, out_buffer_len);
-                }
 
-                len = srtp_decrypt(channel->srtp_local, 1, buf, 8, buf + 8, buf_len - 8, out, &out_buffer_len);
-                
-                if (len >= 0) {
-                    DEBUG_DUMP_HEX_LABEL("RTP header", buf, 12);
-                    DEBUG_DUMP_HEX_LABEL("RTP payload", out, out_buffer_len);
+                    _private_tls_peerconnection_buffer_add(&channel->read_buffer, out, out_buffer_len);
                 }
             }
         } else {
@@ -11391,6 +11482,22 @@ void tls_destroy_peerconnection(struct TLSRTCPeerConnection *channel) {
     if (channel->srtp_remote)
         srtp_destroy(channel->srtp_remote);
 #endif
+
+    while (channel->write_buffer) {
+        struct TLSRTCPeerBuffer *next = (struct TLSRTCPeerBuffer *)channel->write_buffer->next;;
+        if (channel->write_buffer->buf)
+            TLS_FREE(channel->write_buffer->buf);
+        TLS_FREE(channel->write_buffer);
+        channel->write_buffer = next;
+    }
+
+    while (channel->read_buffer) {
+        struct TLSRTCPeerBuffer *next = (struct TLSRTCPeerBuffer *)channel->read_buffer->next;;
+        if (channel->read_buffer->buf)
+            TLS_FREE(channel->read_buffer->buf);
+        TLS_FREE(channel->read_buffer);
+        channel->read_buffer = next;
+    }
 
     TLS_FREE(channel);
 }
