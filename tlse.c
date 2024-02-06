@@ -2395,9 +2395,11 @@ int _private_tls_sign_ecdsa(struct TLSContext *context, unsigned int hash_type, 
         DEBUG_PRINT("Unsupported hash type: %i\n", hash_type);
         return TLS_GENERIC_ERROR;
     }
+
     // "Let z be the Ln leftmost bits of e, where Ln is the bit length of the group order n."
     if (hash_len > (unsigned int)curve->size)
         hash_len = (unsigned int)curve->size;
+
     err = ecc_sign_hash(hash, hash_len, out, outlen, NULL, find_prng("sprng"), &key);
     DEBUG_DUMP_HEX_LABEL("ECC SIGNATURE", out, *outlen);
     ecc_free(&key);
