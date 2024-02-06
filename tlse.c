@@ -1068,6 +1068,7 @@ struct ECCCurveParameters {
     const char *Gx;
     const char *Gy;
     const char *order;
+    const char *oid;
     ltc_ecc_set_type dp;
 };
 
@@ -1080,7 +1081,8 @@ static struct ECCCurveParameters secp192r1 = {
     "64210519E59C80E70FA7E9AB72243049FEB8DEECC146B9B1", // B
     "188DA80EB03090F67CBF20EB43A18800F4FF0AFD82FF1012", // Gx
     "07192B95FFC8DA78631011ED6B24CDD573F977A11E794811", // Gy
-    "FFFFFFFFFFFFFFFFFFFFFFFF99DEF836146BC9B1B4D22831"  // order (n)
+    "FFFFFFFFFFFFFFFFFFFFFFFF99DEF836146BC9B1B4D22831", // order (n)
+    "1.2.840.10045.3.1.1"                               // oid
 };
 
 
@@ -1093,7 +1095,8 @@ static struct ECCCurveParameters secp224r1 = {
     "B4050A850C04B3ABF54132565044B0B7D7BFD8BA270B39432355FFB4", // B
     "B70E0CBD6BB4BF7F321390B94A03C1D356C21122343280D6115C1D21", // Gx
     "BD376388B5F723FB4C22DFE6CD4375A05A07476444D5819985007E34", // Gy
-    "FFFFFFFFFFFFFFFFFFFFFFFFFFFF16A2E0B8F03E13DD29455C5C2A3D"  // order (n)
+    "FFFFFFFFFFFFFFFFFFFFFFFFFFFF16A2E0B8F03E13DD29455C5C2A3D", // order (n)
+    "1.3.132.0.33"                                              // oid
 };
 
 static struct ECCCurveParameters secp224k1 = {
@@ -1105,7 +1108,8 @@ static struct ECCCurveParameters secp224k1 = {
     "00000000000000000000000000000000000000000000000000000005", // B
     "A1455B334DF099DF30FC28A169A467E9E47075A90F7E650EB6B7A45C", // Gx
     "7E089FED7FBA344282CAFBD6F7E319F7C0B0BD59E2CA4BDB556D61A5", // Gy
-    "0000000000000000000000000001DCE8D2EC6184CAF0A971769FB1F7"  // order (n)
+    "0000000000000000000000000001DCE8D2EC6184CAF0A971769FB1F7", // order (n)
+    "1.3.132.0.32"                                              // oid
 };
 
 static struct ECCCurveParameters secp256r1 = {
@@ -1117,7 +1121,8 @@ static struct ECCCurveParameters secp256r1 = {
     "5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B", // B
     "6B17D1F2E12C4247F8BCE6E563A440F277037D812DEB33A0F4A13945D898C296", // Gx
     "4FE342E2FE1A7F9B8EE7EB4A7C0F9E162BCE33576B315ECECBB6406837BF51F5", // Gy
-    "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551"  // order (n)
+    "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551", // order (n)
+    "1.2.840.10045.3.1.7"                                               // oid
 };
 
 static struct ECCCurveParameters secp256k1 = {
@@ -1129,7 +1134,8 @@ static struct ECCCurveParameters secp256k1 = {
     "0000000000000000000000000000000000000000000000000000000000000007", // B
     "79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798", // Gx
     "483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8", // Gy
-    "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"  // order (n)
+    "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", // order (n)
+    "1.3.132.0.10"                                                      // oid
 };
 
 static struct ECCCurveParameters secp384r1 = {
@@ -1141,7 +1147,8 @@ static struct ECCCurveParameters secp384r1 = {
     "B3312FA7E23EE7E4988E056BE3F82D19181D9C6EFE8141120314088F5013875AC656398D8A2ED19D2A85C8EDD3EC2AEF", // B
     "AA87CA22BE8B05378EB1C71EF320AD746E1D3B628BA79B9859F741E082542A385502F25DBF55296C3A545E3872760AB7", // Gx
     "3617DE4A96262C6F5D9E98BF9292DC29F8F41DBD289A147CE9DA3113B5F0B8C00A60B1CE1D7E819D7A431D7C90EA0E5F", // Gy
-    "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF581A0DB248B0A77AECEC196ACCC52973"  // order (n)
+    "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF581A0DB248B0A77AECEC196ACCC52973", // order (n)
+    "1.3.132.0.34"                                                                                      // oid
 };
 
 static struct ECCCurveParameters secp521r1 = {
@@ -1153,7 +1160,8 @@ static struct ECCCurveParameters secp521r1 = {
     "0051953EB9618E1C9A1F929A21A0B68540EEA2DA725B99B315F3B8B489918EF109E156193951EC7E937B1652C0BD3BB1BF073573DF883D2C34F1EF451FD46B503F00", // B
     "00C6858E06B70404E9CD9E3ECB662395B4429C648139053FB521F828AF606B4D3DBAA14B5E77EFE75928FE1DC127A2FFA8DE3348B3C1856A429BF97E7E31C2E5BD66", // Gx
     "011839296A789A3BC0045C8A5FB42C7D1BD998F54449579B446817AFBD17273E662C97EE72995EF42640C550B9013FAD0761353C7086A272C24088BE94769FD16650", // Gy
-    "01FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFA51868783BF2F966B7FCC0148F709A5D03BB5C9B8899C47AEBB6FB71E91386409"  // order (n)
+    "01FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFA51868783BF2F966B7FCC0148F709A5D03BB5C9B8899C47AEBB6FB71E91386409", // order (n)
+    "1.3.132.0.35"                                                                                                                          // oid
 };
 
 #ifdef TLS_CURVE25519
@@ -1167,7 +1175,8 @@ static struct ECCCurveParameters x25519 = {
     "0000000000000000000000000000000000000000000000000000000000000000", // B
     "0000000000000000000000000000000000000000000000000000000000000009", // Gx
     "20AE19A1B8A086B4E01EDD2C7748D14C923D4D7E6D7C61B229E9C5A27ECED3D9", // Gy
-    "1000000000000000000000000000000014DEF9DEA2F79CD65812631A5CF5D3ED"  // order (n)
+    "1000000000000000000000000000000014DEF9DEA2F79CD65812631A5CF5D3ED", // order (n)
+    "1.3.101.110"                                                       // oid
 };
 #endif
 
@@ -1180,6 +1189,7 @@ void init_curve(struct ECCCurveParameters *curve) {
 #else
     curve->dp.cofactor = 1;
     curve->dp.A = (char *)curve->A;
+    curve->dp.OID = curve->oid;
 #endif
     curve->dp.B = (char *)curve->B;
     curve->dp.prime = (char *)curve->P;
@@ -2161,6 +2171,8 @@ int _private_tls_ecc_import_key(const unsigned char *private_key, int private_le
 #if CRYPT < 0x0118
     TLS_TOMCRYPT_PRIVATE_SET_INDEX(key, -1);
     TLS_TOMCRYPT_PRIVATE_DP(key) = dp;
+#else
+    ecc_set_curve(dp, key);
 #endif
     
     /* set z */
@@ -2221,7 +2233,7 @@ int _private_tls_sign_ecdsa(struct TLSContext *context, unsigned int hash_type, 
     tls_init();
     ecc_key key;
     int err;
-    
+    memset(&key, 0, sizeof(key));
     ltc_ecc_set_type *dp = (ltc_ecc_set_type *)&curve->dp;
     
     // broken ... fix this
@@ -2348,6 +2360,8 @@ int _private_tls_ecc_import_pk(const unsigned char *public_key, int public_len, 
 #if CRYPT < 0x0118
     TLS_TOMCRYPT_PRIVATE_SET_INDEX(key, -1);
     TLS_TOMCRYPT_PRIVATE_DP(key) = dp;
+#else
+    ecc_set_curve(dp, key);
 #endif
     
     /* set z */
@@ -7150,7 +7164,7 @@ int tls_parse_certificate(struct TLSContext *context, const unsigned char *buf, 
                         buf_len -= 2;
                     }
                     if (strcmp(buffer_data, context->dtls_data->remote_fingerprint)) {
-                        DEBUG_PRINT(stderr, "PEER CERTIFICATE FINGERPRINT VALIDATION FAILED, computed %s, expected %s\n", buffer_data, context->dtls_data->remote_fingerprint);
+                        DEBUG_PRINT("PEER CERTIFICATE FINGERPRINT VALIDATION FAILED, computed %s, expected %s\n", buffer_data, context->dtls_data->remote_fingerprint);
                         return TLS_UNSUPPORTED_CERTIFICATE;
                     }
                 }
