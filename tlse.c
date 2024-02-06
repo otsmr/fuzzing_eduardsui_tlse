@@ -1003,6 +1003,10 @@ typedef struct {
 #define mp_mod(a, b, c)                      ltc_mp.mpdiv(a, b, NULL, c)
 #define mp_sub(a, b, c)                      ltc_mp.sub(a, b, c)
 #define mp_set(a, b)                         ltc_mp.set_int(a, b)
+#define mp_copy(a, b)                        ltc_mp.copy(a, b)
+#define mp_submod(a, b, c, d)                ltc_mp.submod(a, b, c, d)
+#define mp_mulmod(a, b, c, d)                ltc_mp.mulmod(a, b, c, d)
+#define mp_addmod(a, b, c, d)                ltc_mp.addmod(a, b, c, d)
 
 typedef struct {
     int iana;
@@ -2065,6 +2069,71 @@ int _private_tls_sign_rsa(struct TLSContext *context, unsigned int hash_type, co
 }
 
 #ifdef TLS_ECDSA_SUPPORTED
+
+#if CRYPT >= 0x0118
+
+int _private_tls_is_point(ecc_key *key) {
+    void *prime, *a, *b, *t1, *t2;
+    int err;
+
+    void *x = key->pubkey.x;
+    void *y = key->pubkey.y;
+
+    prime = key->dp.prime;
+    b     = key->dp.B;
+    a     = key->dp.A;
+
+    if ((err = mp_init_multi(&t1, &t2, NULL)) != CRYPT_OK)
+        return err;
+
+    /* compute y^2 */
+    if ((err = mp_sqr(y, t1)) != CRYPT_OK)
+        goto cleanup;
+
+    /* compute x^3 */
+    if ((err = mp_sqr(x, t2)) != CRYPT_OK)
+        goto cleanup;
+    if ((err = mp_mod(t2, prime, t2)) != CRYPT_OK)
+        goto cleanup;
+    if ((err = mp_mul(x, t2, t2)) != CRYPT_OK)
+        goto cleanup;
+
+    /* compute y^2 - x^3 */
+    if ((err = mp_sub(t1, t2, t1)) != CRYPT_OK)
+        goto cleanup;
+
+    /* compute y^2 - x^3 - a*x */
+    if ((err = mp_submod(prime, a, prime, t2)) != CRYPT_OK)
+        goto cleanup;
+    if ((err = mp_mulmod(t2, x, prime, t2)) != CRYPT_OK)
+        goto cleanup;
+    if ((err = mp_addmod(t1, t2, prime, t1)) != CRYPT_OK)
+        goto cleanup;
+
+    /* adjust range (0, prime) */
+    while (mp_cmp_d(t1, 0) == LTC_MP_LT) {
+        if ((err = mp_add(t1, prime, t1)) != CRYPT_OK)
+            goto cleanup;
+    }
+    while (mp_cmp(t1, prime) != LTC_MP_LT) {
+        if ((err = mp_sub(t1, prime, t1)) != CRYPT_OK)
+            goto cleanup;
+    }
+
+    /* compare to b */
+    if (mp_cmp(t1, b) != LTC_MP_EQ) {
+        err = CRYPT_INVALID_PACKET;
+    } else {
+        err = CRYPT_OK;
+    }
+
+cleanup:
+    mp_clear_multi(t1, t2, NULL);
+    return err;
+}
+
+#else
+
 static int _private_tls_is_point(ecc_key *key) {
     void *prime, *b, *t1, *t2;
     int  err;
@@ -2080,28 +2149,30 @@ static int _private_tls_is_point(ecc_key *key) {
     if ((err = mp_read_radix(b, (const char *)TLS_TOMCRYPT_PRIVATE_DP(key)->B, 16)) != CRYPT_OK) {
         goto error;
     }
-    
+
     /* compute y^2 */
     if ((err = mp_sqr(key->pubkey.y, t1)) != CRYPT_OK) {
         goto error;
     }
-    
+
     /* compute x^3 */
     if ((err = mp_sqr(key->pubkey.x, t2)) != CRYPT_OK) {
         goto error;
     }
+
     if ((err = mp_mod(t2, prime, t2)) != CRYPT_OK) {
         goto error;
     }
+
     if ((err = mp_mul(key->pubkey.x, t2, t2)) != CRYPT_OK) {
         goto error;
     }
-    
+
     /* compute y^2 - x^3 */
     if ((err = mp_sub(t1, t2, t1)) != CRYPT_OK) {
         goto error;
     }
-    
+
     /* compute y^2 - x^3 + 3x */
     if ((err = mp_add(t1, key->pubkey.x, t1)) != CRYPT_OK) {
         goto error;
@@ -2138,6 +2209,8 @@ error:
     return err;
 }
 
+#endif
+
 int _private_tls_ecc_import_key(const unsigned char *private_key, int private_len, const unsigned char *public_key, int public_len, ecc_key *key, const ltc_ecc_set_type *dp) {
     int           err;
     
@@ -2145,9 +2218,14 @@ int _private_tls_ecc_import_key(const unsigned char *private_key, int private_le
         return CRYPT_MEM;
         
     key->type = PK_PRIVATE;
-    
+
+#if CRYPT >= 0x0118
+    if ((err = ecc_set_curve(dp, key)) != CRYPT_OK)
+        return err;
+#else
     if (mp_init_multi(&key->pubkey.x, &key->pubkey.y, &key->pubkey.z, &key->k, NULL) != CRYPT_OK)
         return CRYPT_MEM;
+#endif
     
     if ((public_len) && (!public_key[0])) {
         public_key++;
@@ -2171,8 +2249,6 @@ int _private_tls_ecc_import_key(const unsigned char *private_key, int private_le
 #if CRYPT < 0x0118
     TLS_TOMCRYPT_PRIVATE_SET_INDEX(key, -1);
     TLS_TOMCRYPT_PRIVATE_DP(key) = dp;
-#else
-    ecc_set_curve(dp, key);
 #endif
     
     /* set z */
@@ -2340,8 +2416,13 @@ int _private_tls_ecc_import_pk(const unsigned char *public_key, int public_len, 
         
     key->type = PK_PUBLIC;
     
+#if CRYPT >= 0x0118
+    if ((err = ecc_set_curve(dp, key)) != CRYPT_OK)
+        return err;
+#else
     if (mp_init_multi(&key->pubkey.x, &key->pubkey.y, &key->pubkey.z, &key->k, NULL) != CRYPT_OK)
         return CRYPT_MEM;
+#endif
     
     if ((public_len) && (!public_key[0])) {
         public_key++;
@@ -2360,8 +2441,6 @@ int _private_tls_ecc_import_pk(const unsigned char *public_key, int public_len, 
 #if CRYPT < 0x0118
     TLS_TOMCRYPT_PRIVATE_SET_INDEX(key, -1);
     TLS_TOMCRYPT_PRIVATE_DP(key) = dp;
-#else
-    ecc_set_curve(dp, key);
 #endif
     
     /* set z */
