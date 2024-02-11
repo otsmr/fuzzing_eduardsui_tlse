@@ -7833,7 +7833,7 @@ int tls_parse_verify_tls13(struct TLSContext *context, const unsigned char *buf,
     // first 64 bytes to 0x20 (32)
     memset(signing_data, 0x20, 64);
     // context string 33 bytes
-    if (context->is_server)
+    if (!context->is_server)
         memcpy(signing_data + 64, "TLS 1.3, server CertificateVerify", 33);
     else
         memcpy(signing_data + 64, "TLS 1.3, client CertificateVerify", 33);
