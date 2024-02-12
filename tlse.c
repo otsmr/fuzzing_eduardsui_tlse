@@ -1915,7 +1915,7 @@ int _private_tls_verify_rsa(struct TLSContext *context, unsigned int hash_type, 
         err = rsa_verify_hash_ex(buffer, len, hash, hash_len, LTC_PKCS_1_PSS, hash_idx, hash_len, &rsa_stat, &key);
     else
 #endif
-        err = rsa_verify_hash_ex(buffer, len, hash, hash_len, LTC_PKCS_1_V1_5, hash_idx, hash_len, &rsa_stat, &key);
+        err = rsa_verify_hash_ex(buffer, len, hash, hash_len, LTC_PKCS_1_V1_5, hash_idx, 0, &rsa_stat, &key);
     rsa_free(&key);
     if (err)
         return 0;
