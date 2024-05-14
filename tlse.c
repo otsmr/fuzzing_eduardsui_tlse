@@ -7176,6 +7176,7 @@ int tls_parse_certificate(struct TLSContext *context, const unsigned char *buf, 
         // must be 0
         if (context_size)
             res += context_size;
+        size_of_all_certificates --;
     }
 #endif
 
