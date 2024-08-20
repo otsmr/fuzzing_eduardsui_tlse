@@ -10557,23 +10557,27 @@ const char *tls_sni(struct TLSContext *context) {
     return context->sni;
 }
 
-int tls_sni_set(struct TLSContext *context, const char *sni) {
+int tls_sni_nset(struct TLSContext *context, const char *sni, unsigned int len)
+{
     if ((!context) || (context->is_server) || (context->critical_error) || (context->connection_status != 0))
         return 0;
     TLS_FREE(context->sni);
     context->sni = NULL;
-    if (sni) {
-        size_t len = strlen(sni);
-        if (len > 0) {
-            context->sni = (char *)TLS_MALLOC(len + 1);
-            if (context->sni) {
-                context->sni[len] = 0;
-                memcpy(context->sni, sni, len);
-                return 1;
-            }
+    if (sni && len > 0) {
+        context->sni = (char *)TLS_MALLOC(len + 1);
+        if (context->sni) {
+            context->sni[len] = 0;
+            memcpy(context->sni, sni, len);
+            return 1;
         }
     }
     return 0;
+}
+
+int tls_sni_set(struct TLSContext *context, const char *sni) {
+    if (!context || !sni)
+        return 0;
+    return tls_sni_nset(context, sni, strlen(sni));
 }
 
 int tls_srtp_set(struct TLSContext *context) {
