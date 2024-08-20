@@ -888,12 +888,16 @@ typedef enum {
     _md5_sha1 = 255
 } TLSHashAlgorithm;
 
+#define TLS_HASH_ALGO_NUMBER (sha512 - md5 + 1)
+
 typedef enum {
     anonymous = 0,
     rsa = 1,
     dsa = 2,
     ecdsa = 3
 } TLSSignatureAlgorithm;
+
+#define TLS_SIGN_ALGO_NUMBER (ecdsa - rsa + 1)
 
 struct _private_OID_chain {
     void *top;
@@ -6153,7 +6157,7 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
 #endif
                 if ((context->version == TLS_V12) || (context->version == DTLS_V12)) {
                     // signature algorithms
-                    extension_len += 28;
+                    extension_len += 6 + 2 * TLS_HASH_ALGO_NUMBER * TLS_SIGN_ALGO_NUMBER;
                 }
 
                 tls_packet_uint16(packet, extension_len);
@@ -6316,20 +6320,14 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
         if ((context->version == TLS_V12) || (context->version == TLS_V13) || (context->version == DTLS_V13)) {
             if (!context->is_server) {
                 // signature algorithms
-                tls_packet_uint16(packet, 0x0D);
-                tls_packet_uint16(packet, 24);
-                tls_packet_uint16(packet, 22);
-                tls_packet_uint16(packet, 0x0403);
-                tls_packet_uint16(packet, 0x0503);
-                tls_packet_uint16(packet, 0x0603);
-                tls_packet_uint16(packet, 0x0804);
-                tls_packet_uint16(packet, 0x0805);
-                tls_packet_uint16(packet, 0x0806);
-                tls_packet_uint16(packet, 0x0401);
-                tls_packet_uint16(packet, 0x0501);
-                tls_packet_uint16(packet, 0x0601);
-                tls_packet_uint16(packet, 0x0203);
-                tls_packet_uint16(packet, 0x0201);
+                tls_packet_uint16(packet, 0x0D); // type
+                tls_packet_uint16(packet, 2 + 2 * TLS_HASH_ALGO_NUMBER * TLS_SIGN_ALGO_NUMBER); // length
+                tls_packet_uint16(packet, 2 * TLS_HASH_ALGO_NUMBER * TLS_SIGN_ALGO_NUMBER); // actual length of the list and items themselves further
+                for (TLSHashAlgorithm hash = md5; !(hash > sha512); ++hash) {
+                    for (TLSSignatureAlgorithm sign = rsa; !(sign > ecdsa); ++sign) {
+                        tls_packet_uint16(packet, ((uint16_t)(hash) << 8) | (sign & 0xFF));
+                    }
+                }
             }
         }
         
