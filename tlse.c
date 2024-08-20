@@ -6151,6 +6151,11 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
 #endif
                 }
 #endif
+                if ((context->version == TLS_V12) || (context->version == DTLS_V12)) {
+                    // signature algorithms
+                    extension_len += 28;
+                }
+
                 tls_packet_uint16(packet, extension_len);
                 
                 if (sni_len) {
@@ -6306,6 +6311,9 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
 #endif
                 }
             }
+        }
+#endif
+        if ((context->version == TLS_V12) || (context->version == TLS_V13) || (context->version == DTLS_V13)) {
             if (!context->is_server) {
                 // signature algorithms
                 tls_packet_uint16(packet, 0x0D);
@@ -6324,7 +6332,6 @@ struct TLSPacket *tls_build_hello(struct TLSContext *context, int tls13_downgrad
                 tls_packet_uint16(packet, 0x0201);
             }
         }
-#endif
         
         if ((!packet->broken) && (packet->buf)) {
             int remaining = packet->len - start_len;
