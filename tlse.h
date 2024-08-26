@@ -352,6 +352,7 @@ int tls_request_client_certificate(struct TLSContext *context);
 int tls_client_verified(struct TLSContext *context);
 const char *tls_sni(struct TLSContext *context);
 int tls_sni_set(struct TLSContext *context, const char *sni);
+int tls_sni_nset(struct TLSContext *context, const char *sni, unsigned int len);
 // set DTLS-SRTP mode for DTLS context
 int tls_srtp_set(struct TLSContext *context);
 int tls_srtp_key(struct TLSContext *context, unsigned char *buffer);
