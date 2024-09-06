@@ -2,10 +2,16 @@
 
 #include <stdio.h>
 #include <string.h>    //strlen
+#include <signal.h>
+#include <stdlib.h>
+#include <inttypes.h>
+#include <stdint.h>
+
 #ifdef _WIN32
     #include <winsock2.h>
     #define socklen_t int
 #else
+    #include <unistd.h>
     #include <sys/socket.h>
     #include <arpa/inet.h>
 #endif
@@ -31,12 +37,10 @@ void load_keys(struct TLSContext *context, char *fname, char *priv_fname) {
     unsigned char buf2[0xFFFF];
     int size = read_from_file(fname, buf, 0xFFFF);
     int size2 = read_from_file(priv_fname, buf2, 0xFFFF);
-    if (size > 0) {
-        if (context) {
-            tls_load_certificates(context, buf, size);
-            tls_load_private_key(context, buf2, size2);
-            // tls_print_certificate(fname);
-        }
+    if (size > 0 && context) {
+        tls_load_certificates(context, buf, size);
+        tls_load_private_key(context, buf2, size2);
+        // tls_print_certificate(fname);
     }
 }
 
@@ -188,7 +192,7 @@ int main(int argc , char *argv[]) {
     /* COOLER STUFF => */   struct TLSContext *imported_context = tls_import_context(export_buffer, size);
     // This is cool because a context can be sent to an existing process.
     // It will work both with fork and with already existing worker process.
-                            fprintf(stderr, "Imported context (size: %i): %x\n", size, imported_context);
+                            fprintf(stderr, "Imported context (size: %i): %" PRIxPTR "\n", size, (uintptr_t)imported_context);
                             if (imported_context) {
                                 // destroy old context
                                 tls_destroy_context(context);
