@@ -97,7 +97,7 @@ int main(int argc , char *argv[]) {
     int socket_desc , client_sock , read_size;
     socklen_t c;
     struct sockaddr_in server , client;
-    char client_message[0xFFFF];
+    unsigned char client_message[0xFFFF];
 
 #ifdef _WIN32
     WSADATA wsaData;
@@ -216,7 +216,7 @@ int main(int argc , char *argv[]) {
                         snprintf(send_buffer, sizeof(send_buffer), "Hello world from TLS 1.%i (used chipher is: %s), SNI: %s\r\nYour identity is: %s\r\n\r\nCertificate: %s\r\n\r\nBelow is the received header:\r\n%s\r\nAnd the source code for this example: \r\n\r\n%s", tls_version, tls_cipher_name(context), sni, identity_str, tls_certificate_to_string(server_context->certificates[0], out_buffer, sizeof(out_buffer)), read_buffer, source_buf);
                         int content_length = strlen(send_buffer);
                         snprintf(send_buffer_with_header, sizeof(send_buffer), "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-type: text/plain\r\nContent-length: %i\r\n\r\n%s", content_length, send_buffer);
-                        tls_write(context, send_buffer_with_header, strlen(send_buffer_with_header));
+                        tls_write(context, (unsigned char const *)send_buffer_with_header, strlen(send_buffer_with_header));
                         tls_close_notify(context);
                         send_pending(client_sock, context);
                         break;
