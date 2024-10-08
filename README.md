@@ -10,7 +10,9 @@ Like this project ? You may donate Bitcoin for this project at 14LqvMzFfaJ82C7wY
 
 ![](https://raw.githubusercontent.com/eduardsui/edwork/master/bwallet.png)
 
-Compiling
+## Compiling
+
+### Manually
 ----------
 
 Simple TLS client:
@@ -37,14 +39,21 @@ If thread-safety is needed, you need to call `tls_init()` before letting any oth
 
 TLSe supports KTLS on linux kernel 4.13 or higher. KTLS is a TLS implementation in the linux kernel. If TLS_RX is not defined, KTLS is send-only (you may use send/sendfile to send data, but you may not use recv). Also, the negotiation must be handled by TLSe. If KTLS support is needed, define WITH_KTLS (compile with -DWITH_KTLS). Note that is not clear which header should be included for linux structure, you may need to check these structures and constants: https://github.com/torvalds/linux/blob/master/Documentation/networking/tls.txt.
 
-Usage
+### With cmake
+----------
+
+`$ mkdir build && cd build && cmake ../ -DTLSE_COMPILE_DEFINITIONS="TLS_AMALGAMATION" -DBUILD_EXAMPLES=ON && cmake --build . --verbose`
+
+`TLSE_COMPILE_DEFINITIONS` may be given with a filler as semicolon-reparated values enclosed into double-quoted string
+
+## Usage
 ----------
 
 You just 
 `#include "tlse.c"`
 in your code. Everything is a single file.
 
-Features
+## Features
 ----------
 
 The main feature of this implementation is the ability to serialize TLS context, via tls_export_context and re-import it, via tls_import_context in another pre-forked worker process (socket descriptor may be sent via sendmsg).
@@ -70,7 +79,7 @@ The library supports certificate validation by using ``tls_certificate_chain_is_
 
 This library was written to be used by my other projects [Concept Applications Server](https://github.com/Devronium/ConceptApplicationServer "Concept Application Server") and [Concept Native Client](https://github.com/Devronium/ConceptClientQT "Concept Client QT")
 
-Examples
+## Examples
 ----------
 1. [examples/tlsclienthello.c](https://github.com/eduardsui/tlslayer/blob/master/examples/tlsclienthello.c) simple client example
 2. [examples/tlshelloworld.c](https://github.com/eduardsui/tlslayer/blob/master/examples/tlshelloworld.c) simple server example
@@ -79,11 +88,11 @@ Examples
 
 After compiling the examples, in the working directory, you should put fullchain.pem and privkey.pem in a directory called testcert for running the server examples. I've used [letsencrypt](https://github.com/letsencrypt/letsencrypt) for certificate generation (is free!).
 
-Important security note
+## Important security note
 ----------
 
 Note that for DTLS, it doesn't implement a state machine, so using this DTLS implementation with UDP (server) may expose your server to DoS attack.
 
-License
+## License
 ----------
 Public domain, BSD, MIT. Choose one.

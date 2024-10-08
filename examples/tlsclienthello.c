@@ -1,10 +1,14 @@
 #include <stdio.h>
-#include <sys/types.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <string.h>
+
 #ifdef _WIN32
     #include <winsock2.h>
     #define socklen_t int
     #define sleep(x)    Sleep(x*1000)
 #else
+    #include <sys/types.h>
     #include <sys/socket.h>
     #include <netinet/in.h>
     #include <netdb.h> 
