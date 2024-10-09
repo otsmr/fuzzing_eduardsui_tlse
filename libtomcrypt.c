@@ -19370,7 +19370,7 @@ int der_decode_sequence_flexi(const unsigned char *in, unsigned long *inlen, ltc
                 l->type = LTC_ASN1_UTF8_STRING;
                 l->size = len;
 
-                if ((l->data = XCALLOC(sizeof(wchar_t), l->size)) == NULL) {
+                if ((l->data = XCALLOC(l->size, sizeof(wchar_t))) == NULL) {
                     err = CRYPT_MEM;
                     goto error;
                 }
@@ -19613,7 +19613,7 @@ int der_decode_sequence_multi(const unsigned char *in, unsigned long inlen, ...)
         return CRYPT_NOP;
     }
 
-    list = XCALLOC(sizeof(*list), x);
+    list = XCALLOC(x, sizeof(*list));
     if (list == NULL) {
         return CRYPT_MEM;
     }
@@ -21053,7 +21053,7 @@ int der_encode_sequence_multi(unsigned char *out, unsigned long *outlen, ...) {
         return CRYPT_NOP;
     }
 
-    list = XCALLOC(sizeof(*list), x);
+    list = XCALLOC(x, sizeof(*list));
     if (list == NULL) {
         return CRYPT_MEM;
     }
