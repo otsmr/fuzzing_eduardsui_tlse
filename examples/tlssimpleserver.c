@@ -12,6 +12,7 @@
 #include "../tlse.c"
 
 int main(int argc , char *argv[]) {
+
     int socket_desc , client_sock , read_size;
     socklen_t c;
     struct sockaddr_in server , client;
@@ -54,8 +55,8 @@ int main(int argc , char *argv[]) {
         fprintf(stderr, "Error creating server context\n");
         return -1;
     }
-    SSL_CTX_use_certificate_file(server_ctx, "testcert/fullchain.pem", SSL_SERVER_RSA_CERT);
-    SSL_CTX_use_PrivateKey_file(server_ctx, "testcert/privkey.pem", SSL_SERVER_RSA_KEY);
+    SSL_CTX_use_certificate_file(server_ctx, "./server.cert", SSL_SERVER_RSA_CERT);
+    SSL_CTX_use_PrivateKey_file(server_ctx, "./server.key", SSL_SERVER_RSA_KEY);
 
     if (!SSL_CTX_check_private_key(server_ctx)) {
         fprintf(stderr, "Private key not loaded\n");

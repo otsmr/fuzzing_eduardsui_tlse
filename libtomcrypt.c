@@ -28197,6 +28197,7 @@ int rand_prime(void *N, long len, prng_state *prng, int wprng) {
 /* on *NIX read /dev/random */
 static unsigned long rng_nix(unsigned char *buf, unsigned long len,
                              void (*callback)(void)) {
+  printf("rng_nix called\n");
  #ifdef LTC_NO_FILE
     return 0;
  #else

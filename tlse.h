@@ -214,6 +214,7 @@ typedef int (*tls_validation_function)(struct TLSContext *context, struct TLSCer
   before using the library.
  */
 void tls_init();
+    struct TLSCertificate *asn1_parse(struct TLSContext *context, const unsigned char *buffer, unsigned int size, int client_cert);
 unsigned char *tls_pem_decode(const unsigned char *data_in, unsigned int input_length, int cert_index, unsigned int *output_len);
 struct TLSCertificate *tls_create_certificate();
 int tls_certificate_valid_subject(struct TLSCertificate *cert, const char *subject);
